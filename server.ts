@@ -3,6 +3,7 @@ import { open, realpath, stat } from 'node:fs/promises';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { defineRpcContract, type BbPluginApi, type PluginAgentConfiguration, type PluginAgentConfigurationContext } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
+import { registerKimiSetup } from './kimi-setup';
 import { contextualPreviewText, actionPrompt, getAction, getWorkspace, resolveActionContext, validateInstructions, READ_ONLY_RULES } from './catalog';
 import { aspectIdSchema, idSchema, loadConfig, loadConfigSync, workspaceSchema, type CatalogWorkspace, type WorkplaceConfig } from './config';
 import type { ActionContext, ActionPreview, Overview, SourceDocument, SourceRef, StartedAction, WorkspaceId } from './types';
@@ -155,6 +156,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   const skillScope = (workspace: CatalogWorkspace) => JSON.stringify([workspace.projectId, workspace.environmentId, workspace.hostId]);
   settings.onChange(next => { configPath = next.configPath; skillCatalogs.clear(); });
   const primaryHostId = (await bb.sdk.system.config()).primaryHostId;
+  await registerKimiSetup(bb, primaryHostId);
   function validateLocal(config: WorkplaceConfig) {
     validateInstructions(config);
     if (config.workspaces.some(w => w.hostId !== primaryHostId)) throw new Error('Этот эксперимент читает только пространства на машине BB-сервера. Удалённые hosts пока не поддерживаются.');
@@ -247,6 +249,10 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   // One configure callback owns dispatch. Metadata routes tasks; handlers still check authority.
   bb.agents.configure(context => {
     const own = context.origin.pluginId === bb.pluginId && context.origin.kind === null;
+    if (own && context.pluginMetadata.kimiSetup === 1 && Object.keys(context.pluginMetadata).length === 1 &&
+        context.provider.id === 'acp-claude-kimi' && context.host.id === primaryHostId) {
+      return { tools: [], skills: [], instructions: 'Это короткая проверка ответа Kimi. Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы. Не начинай подключение svaib или онбординг.' };
+    }
     const setup = own && context.pluginMetadata.task === 'svaib-connect';
     const supported = supportsConnection(context.provider.id);
     const base = setup ? account.configure(context) : own ? workplaceConfiguration(context)

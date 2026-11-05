@@ -1,4 +1,4 @@
-"""Copy this release's provider-specific method marketplace to stable BB state.
+"""Copy this release's method marketplace to the selected provider's stable BB state.
 
 Run from the installed BB plugin. Native marketplace/plugin updates remain
 separate native CLI operations. This helper never reads OAuth or model config.
@@ -93,7 +93,9 @@ def _version(value: object) -> tuple[int, int, int]:
     return tuple(int(part) for part in value.split("."))
 
 
-def _host(files: dict[str, bytes], provider: str) -> None:
+def _host(files: dict[str, bytes], host: str) -> None:
+    if host not in ("codex", "claude", "auto"):
+        raise PreparationError("Unsupported native hook host")
     config = json.loads(files["plugins/svaib/hooks/hooks.json"])
     found = set()
     for groups in config["hooks"].values():
@@ -102,11 +104,42 @@ def _host(files: dict[str, bytes], provider: str) -> None:
                 command = hook.get("command", "")
                 for name in ("inject_company.py", "inject_space_map.py"):
                     if name in command:
-                        if shlex.split(command)[-1] != provider:
+                        if shlex.split(command)[-1] != host:
                             raise PreparationError("Wrong native host in method hooks")
                         found.add(name)
     if found != {"inject_company.py", "inject_space_map.py"}:
         raise PreparationError("Required native host hooks are missing")
+
+
+def _identity(files: dict[str, bytes], version: str) -> None:
+    _version(version)
+    plugin = json.loads(files["plugins/svaib/.claude-plugin/plugin.json"])
+    catalog = json.loads(files[".claude-plugin/marketplace.json"])
+    entries = catalog.get("plugins")
+    if (plugin.get("name") != "svaib" or plugin.get("version") != version
+            or catalog.get("name") != "svaib"
+            or not isinstance(entries, list) or len(entries) != 1
+            or not isinstance(entries[0], dict) or entries[0].get("name") != "svaib"
+            or entries[0].get("source") != "./plugins/svaib"
+            or entries[0].get("version") != version):
+        raise PreparationError("Method package identity mismatch")
+
+
+def _entry(manifest: dict, provider: str) -> dict:
+    # TODO(remove-schema-1): remove this legacy reader after two BB releases
+    # shipping schema 2; it exists only for the transition from methods 0.9.2.
+    if manifest.get("schema") == 1 and isinstance(manifest.get("providers"), dict):
+        entry = manifest["providers"].get(provider)
+        root, host = "methods/" + provider, provider
+    elif manifest.get("schema") == 2:
+        entry = manifest.get("method")
+        root, host = "methods/common", "auto"
+    else:
+        raise PreparationError("Unsupported method manifest")
+    if (not isinstance(entry, dict) or entry.get("root") != root
+            or entry.get("host") != host):
+        raise PreparationError("Method manifest mismatch")
+    return entry
 
 
 @contextmanager
@@ -130,28 +163,19 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
     if package.get("name") != "bb-plugin-svaib-workplace":
         raise PreparationError("Unexpected BB plugin source")
     manifest = _object(source_root / "methods/manifest.json")
-    if manifest.get("schema") != 1 or not isinstance(manifest.get("providers"), dict):
-        raise PreparationError("Unsupported method manifest")
-    entry = manifest["providers"].get(provider)
-    if (not isinstance(entry, dict) or entry.get("root") != "methods/" + provider
-            or entry.get("host") != provider or not isinstance(entry.get("version"), str)):
-        raise PreparationError("Provider manifest mismatch")
-    new_version = _version(entry["version"])
-    source = source_root / "methods" / provider
+    entry = _entry(manifest, provider)
+    new_version = _version(entry.get("version"))
+    source = source_root / entry["root"]
     if (source_root / "methods").is_symlink():
         raise PreparationError("Symlink in source path")
     files = _snapshot(source, entry.get("files"))
-    _host(files, provider)
-    plugin = json.loads(files["plugins/svaib/.claude-plugin/plugin.json"])
-    catalog = json.loads(files[".claude-plugin/marketplace.json"])
-    entries = catalog.get("plugins")
-    if (plugin.get("name") != "svaib" or plugin.get("version") != entry["version"]
-            or catalog.get("name") != "svaib"
-            or not isinstance(entries, list) or len(entries) != 1
-            or not isinstance(entries[0], dict) or entries[0].get("name") != "svaib"
-            or entries[0].get("source") != "./plugins/svaib"
-            or entries[0].get("version") != entry["version"]):
-        raise PreparationError("Method package identity mismatch")
+    _host(files, entry["host"])
+    _identity(files, entry["version"])
+    if manifest["schema"] == 2:
+        stages = files.get("plugins/svaib/skills/onboarding/references/stages.json")
+        if (stages is None or hashlib.sha256(stages).hexdigest()
+                != manifest.get("onboardingCatalogSha256")):
+            raise PreparationError("Method onboarding catalog mismatch")
     if (not data_dir.is_absolute() or data_dir.resolve() != data_dir
             or not data_dir.is_dir()):
         raise PreparationError("Use the canonical BB data directory from bb status")
@@ -170,9 +194,12 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
             if (old_owner.get("schema") != 1 or old_owner.get("pluginId") != PLUGIN_ID
                     or old_owner.get("provider") != provider):
                 raise PreparationError("Existing marketplace is not owned by this installer")
-            if _version(old_owner.get("version")) > new_version:
+            old_version = _version(old_owner.get("version"))
+            if old_version > new_version:
                 raise PreparationError("Refusing an implicit method downgrade")
             _snapshot(target, old_owner.get("files"))
+            if old_version == new_version and old_owner.get("files") != entry["files"]:
+                raise PreparationError("Method content changed without a version increment")
             if old_owner == owner:
                 return {"marketplaceRoot": str(target), "version": entry["version"],
                         "provider": provider, "changed": False}

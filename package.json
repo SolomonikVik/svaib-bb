@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-svaib-workplace",
-  "version": "0.3.23",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48.1",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "svaib [Early access]",
-    "description": "AI-партнёр руководителя в BB: подключение аккаунта svaib и работа со структурой управленческого пространства.",
+    "description": "Настройка Kimi, подключение svaib и работа с управленческим пространством в BB.",
     "branding": {
       "icon": "./assets/icon.svg"
     },

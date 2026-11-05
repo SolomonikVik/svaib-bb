@@ -2,9 +2,14 @@ import { spawn } from 'node:child_process';
 import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { browserContract } from './browser-contract';
 import { nativeHookAutomatic } from './hook-native';
+import { join } from 'node:path';
+import { inspectKimi, prepareKimi, replaceKimiKey } from '../../kimi-host';
 
 // The authorization URL never passes through a model, terminal or saved thread.
 export default experimental_defineHostEntry({ contract: browserContract, handlers: {
+  async kimiInspect(_, context) { return inspectKimi(join(context.experimental_paths.dataDir, 'kimi-cc'), context.signal); },
+  async kimiPrepare({ apiKey }, context) { return prepareKimi(join(context.experimental_paths.dataDir, 'kimi-cc'), apiKey, context.signal); },
+  async kimiReplaceKey({ apiKey }, context) { await replaceKimiKey(join(context.experimental_paths.dataDir, 'kimi-cc'), apiKey, context.signal); return null; },
   async automaticHooks(input, context) { return nativeHookAutomatic(input, context.signal); },
   async openLogin({ url }) {
     const configured = process.env.BROWSER;

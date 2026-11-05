@@ -36,8 +36,8 @@ export function registration(root, executable = process.execPath) {
       project: ['.claude/skills', '.agents/skills'].map(path => ({ path, recursive: true, ancestors: true })) } };
 }
 
-async function npmCliPath() {
-  const bin = dirname(process.execPath);
+export async function npmCliPath(nodeExecutable = process.execPath) {
+  const bin = dirname(nodeExecutable);
   for (const path of [join(bin, 'node_modules/npm/bin/npm-cli.js'),
     resolve(bin, '../lib/node_modules/npm/bin/npm-cli.js'), '/usr/share/nodejs/npm/bin/npm-cli.js']) {
     try { await access(path); return path; } catch { /* next supported Node installation */ }
@@ -45,7 +45,7 @@ async function npmCliPath() {
   throw new Error('npm не найден рядом с Node.js. Установи Node.js 22+ официальным установщиком с npm.');
 }
 
-export async function provision({ root, apiKey, install = command, npmCli = null }) {
+export async function provision({ root, apiKey, install = command, npmCli = null, nodeExecutable = process.execPath }) {
   if (!/^sk-kimi-[A-Za-z0-9_-]+$/.test(apiKey)) throw new Error('Ожидается ключ Kimi Code вида sk-kimi-…; значение не сохранено.');
   root = resolve(root);
   // A separate directory and exclusive writes preserve every existing profile.
@@ -64,9 +64,24 @@ export async function provision({ root, apiKey, install = command, npmCli = null
     CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1048576', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1048576' };
   await writeFile(join(configRoot, 'settings.json'), JSON.stringify({ env }, null, 2), { mode: 0o600, flag: 'wx' });
   await writeFile(join(configRoot, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, penguinModeOrgEnabled: true }), { mode: 0o600, flag: 'wx' });
+  await writeFile(join(root, 'setup-owner.json'), JSON.stringify({ schema: 1, adapter: ADAPTER, nodeExecutable }), { mode: 0o600, flag: 'wx' });
+  return finishProvision({ root, install, npmCli, nodeExecutable });
+}
+
+// Only a profile created by this helper can resume a failed dependency download.
+export async function resumeProvision({ root, install = command, npmCli = null }) {
+  for (const name of ['', 'setup-owner.json', 'credentials.json', 'claude', 'claude/settings.json']) {
+    if ((await lstat(join(root, name))).isSymbolicLink()) throw new Error('Профиль настройки изменён. Ничего не перезаписано.');
+  }
+  const owner = JSON.parse(await readFile(join(root, 'setup-owner.json'), 'utf8'));
+  if (owner.schema !== 1 || owner.adapter !== ADAPTER || typeof owner.nodeExecutable !== 'string') throw new Error('Неизвестный профиль настройки.');
+  return finishProvision({ root, install, npmCli, nodeExecutable: owner.nodeExecutable });
+}
+
+async function finishProvision({ root, install, npmCli, nodeExecutable }) {
   const runtime = join(root, 'runtime');
-  await install(process.execPath,
-    [npmCli ?? await npmCliPath(), 'install', '--prefix', runtime, '--no-audit', '--no-fund', ADAPTER]);
+  await install(nodeExecutable,
+    [npmCli ?? await npmCliPath(nodeExecutable), 'install', '--prefix', runtime, '--no-audit', '--no-fund', ADAPTER]);
   const adapterDir = join(runtime, 'node_modules', '@agentclientprotocol', 'claude-agent-acp', 'dist');
   const launcher = `import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -108,10 +123,17 @@ if (process.argv.includes('--list-models')) {
   }
 }
 `;
-  await writeFile(join(root, 'launch.mjs'), launcher, { mode: 0o600, flag: 'wx' });
-  const agent = registration(root);
-  await writeFile(join(root, 'bb-agent.json'), JSON.stringify(agent, null, 2), { mode: 0o600, flag: 'wx' });
+  await sameOrNew(join(root, 'launch.mjs'), launcher);
+  const agent = registration(root, nodeExecutable);
+  await sameOrNew(join(root, 'bb-agent.json'), JSON.stringify(agent, null, 2));
   return agent;
+}
+
+async function sameOrNew(path, content) {
+  try { await writeFile(path, content, { mode: 0o600, flag: 'wx' }); }
+  catch (error) {
+    if (error.code !== 'EEXIST' || (await lstat(path)).isSymbolicLink() || await readFile(path, 'utf8') !== content) throw error;
+  }
 }
 
 async function secret() {
