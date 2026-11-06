@@ -119,7 +119,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
       </> : <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiStart', {})); }}>Продолжить настройку</button>}
     </>}
     {view.stage === 'verify' && <>
-      <p>Отправь короткий запрос через Kimi. Для проверки выбери Kimi (CC) и компьютер, на котором прошла настройка.</p>
+      <p>Отправь короткий запрос через Kimi. Проверка запустится на компьютере, где настроен Kimi.</p>
       {view.testThreadId ? <div className="svb-kimi-actions">
           <button className="svb-text-button" onClick={() => openThread(view.testThreadId!)}>Открыть проверочный разговор</button>
           <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiCheckResponse', null)); }}>Проверить ответ</button>
@@ -143,13 +143,12 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
             let result;
             try {
               if (request.providerId !== 'acp-claude-kimi') { failure = 'Для этой проверки выбери Kimi (CC). Другого агента можно сохранить кнопкой ниже.'; throw new Error('wrong-provider'); }
-              const environment = request.environment;
-              failure = 'Не удалось проверить компьютер BB. Выбери его заново и повтори отправку.';
-              const host = environment.type === 'host' ? environment.hostId : environment.type === 'reuse'
-                ? (await sdk.environments.get({ environmentId: environment.environmentId })).hostId : null;
-              if (host !== view.hostId) { failure = 'Выбери компьютер, на котором только что настроен Kimi.'; throw new Error('wrong-host'); }
-              failure = 'Не удалось создать проверочный разговор. Проверь подключение к BB и повтори отправку.';
-              result = await sdk.threads.spawn({ ...request, title: 'Проверка Kimi', pluginMetadata: { kimiSetup: 1 } });
+              if (!view.hostId) { failure = 'Компьютер настройки недоступен. Повтори проверку подключения к BB.'; throw new Error('missing-host'); }
+              // This is a check of the configured Kimi profile, so its host is
+              // fixed even when the shared composer restores a project default.
+              result = await sdk.threads.spawn({ ...request,
+                environment: { type: 'host', hostId: view.hostId, workspace: { type: 'unmanaged', path: null } },
+                title: 'Проверка Kimi', pluginMetadata: { kimiSetup: 1 } });
             } catch (error) { setError(failure); throw error; }
             const pendingBinding = { threadId: result.id, keyChangedAt: view.keyChangedAt };
             rememberBinding(view.hostId, pendingBinding); setBinding(pendingBinding);
