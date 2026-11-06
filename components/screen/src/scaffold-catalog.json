@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "4.3.2",
-  "canonSnapshot": "adfe92618122",
+  "canonSnapshot": "e3d59916b6d0",
   "templates": [
     {
       "path": "templates/aspects/01_strategic/goal.md",

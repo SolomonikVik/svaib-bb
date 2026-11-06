@@ -30,6 +30,7 @@ export interface ScreenBackendPort {
   submit(input: Submit, signal?: AbortSignal): Promise<{ screen: Screen }>;
   update(input: Update, signal?: AbortSignal): Promise<{ screen: Screen }>;
   confirmScaffold(input: Confirm, signal?: AbortSignal): Promise<{ screen: Screen }>;
+  expandScaffold?(input: Parameters<NonNullable<ScreenTransport['expandScaffold']>>[0], signal?: AbortSignal): Promise<{ screen: Screen }>;
   events(input: { after: number; timeoutMs: number }, signal?: AbortSignal): Promise<Events>;
 }
 
@@ -158,6 +159,7 @@ export function createScreenTransport(options: {
     submit: input => request(signal => backend.submit(input, signal)),
     update: input => request(signal => backend.update(input, signal)),
     confirmScaffold: input => request(signal => backend.confirmScaffold(input, signal)),
+    ...(backend.expandScaffold ? {expandScaffold: (input: Parameters<NonNullable<ScreenTransport['expandScaffold']>>[0]) => request(signal => backend.expandScaffold!(input, signal))} : {}),
     subscribe(invalidate) {
       lifetime.signal.throwIfAborted();
       const controller = new AbortController(); subscriptions.add(controller);

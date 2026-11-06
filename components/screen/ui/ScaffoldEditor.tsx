@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Block, Screen } from '../src/model';
 import type { ScreenTransport } from './ScreenRenderer';
-import { treeConfigSchema, type TreeConfig } from '../src/scaffold-tree-model';
+import { treeConfigSchema, scaffoldVisibilityPolicy, type TreeConfig } from '../src/scaffold-tree-model';
 import { toTreeConfig } from './scaffold-tree';
 import manifest from '../src/scaffold-catalog.json';
 import source from './scaffold-source.json';
@@ -9,7 +9,8 @@ import './scaffold-site.css';
 import type { ScaffoldFrameMessage } from './raw';
 import { z } from 'zod';
 
-const html = source.replace('__SCREEN_TEMPLATES__', JSON.stringify(manifest.templates.map(item => item.path)).replaceAll('<', '\\u003c'));
+const html = source.replace('__SCREEN_TEMPLATES__', JSON.stringify(manifest.templates.map(item => item.path)).replaceAll('<', '\\u003c'))
+  .replace('__SCREEN_VISIBILITY_POLICY__', JSON.stringify(scaffoldVisibilityPolicy).replaceAll('<', '\\u003c'));
 const uiSchema = z.object({ selectedId: z.string().max(200), openIds: z.array(z.string().max(200)).max(5000),
   controlGroups: z.record(z.string(), z.boolean()) }).strict();
 type UiState = z.infer<typeof uiSchema>;
@@ -55,7 +56,7 @@ export function ScaffoldEditor(props: Props) {
   const ready = useRef(false);
   function post(message: unknown) { iframe.current?.contentWindow?.postMessage(message, '*'); }
   function remember() { if (latest.current.screen.canEdit === true) saveDraft(props.cacheKey, owner.current, { draft: draft.current, base: base.current, revision: revision.current, ui: ui.current }); }
-  function initializeFrame(config: TreeConfig) { post({ type: 'screen-init', config, ui: ui.current, readOnly: latest.current.screen.canEdit !== true }); }
+  function initializeFrame(config: TreeConfig) { post({ type: 'screen-init', config, ui: ui.current, readOnly: latest.current.screen.canEdit !== true, expandable: Boolean(latest.current.transport.expandScaffold) }); }
   useEffect(() => { if (props.cacheKey) { draftOwners.set(props.cacheKey, owner.current); remember(); } }, [props.cacheKey]);
   useEffect(() => {
     const incoming = toTreeConfig(props.block.config);
@@ -111,6 +112,26 @@ export function ScaffoldEditor(props: Props) {
       while (latest.current.screen.canEdit === true && (JSON.stringify(draft.current) !== base.current || saving.current)) await saveDraftToServer();
     }
     const unregisterDrain = latest.current.transport.registerDrain?.(flushDraft);
+    async function expand(nodeId: unknown) {
+      if (typeof nodeId !== 'string' || busy.current || latest.current.screen.canEdit !== true || !latest.current.transport.expandScaffold) return;
+      const target = draft.current.tree.find(node => node.id === nodeId);
+      if (target?.type !== 'folder' || !target.note.startsWith('Не загружено.')) return;
+      busy.current = true; post({type:'screen-status', busy:true, message:'Читаю папку…'});
+      try {
+        await flushDraft();
+        const current = latest.current;
+        const result = await current.transport.expandScaffold!({nodeId, requestId:crypto.randomUUID(), expectedRevision:revision.current});
+        if (!alive) return;
+        const block = result.screen.document.blocks.find(item => item.id === current.block.id);
+        if (block?.type !== 'scaffold') throw new Error('Ветка недоступна.');
+        server.current = result.screen; revision.current = result.screen.revision;
+        draft.current = toTreeConfig(block.config); base.current = JSON.stringify(draft.current); remember();
+        current.receive(result.screen); initializeFrame(draft.current);
+        post({type:'screen-status',message:''});
+      } catch (cause) {
+        if (alive) post({type:'screen-status',message:screenErrorMessage(cause)});
+      } finally {busy.current = false; if (alive) post({type:'screen-status',busy:false});}
+    }
     async function handoff(raw: unknown) {
       if (latest.current.screen.canEdit !== true || busy.current) return;
       const parsed = treeConfigSchema.safeParse(raw);
@@ -145,6 +166,7 @@ export function ScaffoldEditor(props: Props) {
       }
       if (data?.type === 'screen-ui') { const parsed = uiSchema.safeParse(data.ui); if (parsed.success) { ui.current = parsed.data; remember(); } }
       if (data?.type === 'screen-handoff') void handoff(data.config);
+      if (data?.type === 'screen-expand') void expand(data.nodeId);
     }
     window.addEventListener('message', listener);
     if (JSON.stringify(draft.current) !== base.current && latest.current.screen.revision === revision.current) scheduleSave();

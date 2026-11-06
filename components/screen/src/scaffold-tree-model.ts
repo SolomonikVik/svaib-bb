@@ -1,5 +1,16 @@
 import { z } from 'zod';
 import manifest from './scaffold-catalog.json';
+export const scaffoldVisibilityPolicy = {
+  canonicalDotPaths: ['.svaib'],
+  technicalNames: ['node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv', 'target', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'uv.lock', 'poetry.lock'],
+  serviceMetadata: ['platform.json', 'space.json', 'usage', 'cache'],
+};
+export function technicalScaffoldPath(path: string): boolean {
+  const parts = path.split('/');
+  return parts.some((name, index) => name.startsWith('.') && !scaffoldVisibilityPolicy.canonicalDotPaths.includes(parts.slice(0, index + 1).join('/')))
+    || (parts[0] === '.svaib' && scaffoldVisibilityPolicy.serviceMetadata.includes(parts[1]))
+    || parts.some(name => scaffoldVisibilityPolicy.technicalNames.includes(name));
+}
 const identifier = z.string().regex(/^[a-zA-Z0-9а-яёА-ЯЁ_-]{1,200}$/).refine(value => !['__proto__', 'constructor', 'prototype'].includes(value));
 // A colon can qualify a Windows drive or alternate data stream, not a workspace segment.
 const segment = z.string().min(1).max(150).regex(/^[^:]+$/, 'Недопустимое имя элемента.').refine(value => !/[\\/\u0000-\u001f]/.test(value) && !['.', '..'].includes(value), 'Недопустимое имя элемента.');

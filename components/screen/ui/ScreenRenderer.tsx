@@ -47,6 +47,7 @@ export type ScreenTransport = {
   submit(input: { id: string; requestId: string; expectedRevision: number; selectedIds: string[] }): Promise<{ screen: Screen }>;
   update?(input: { id: string; requestId: string; expectedRevision: number; document: Screen['document'] }): Promise<{ screen: Screen }>;
   confirmScaffold?(input: { id: string; requestId: string; expectedRevision: number; blockId: string }): Promise<{ screen: Screen }>;
+  expandScaffold?(input: { nodeId: string; requestId: string; expectedRevision: number }): Promise<{ screen: Screen }>;
   registerDrain?(drain: () => Promise<void>): () => void;
   subscribe?(invalidate: () => void): () => void;
 };
@@ -90,6 +91,7 @@ function ScreenContent({ transport, invalidate = 0, cacheKey }: { transport: Scr
     return { ...transport,
       ...(transport.update ? { update: (input: Parameters<NonNullable<ScreenTransport['update']>>[0]) => write(value => transport.update!(value), input) } : {}),
       ...(transport.confirmScaffold ? { confirmScaffold: (input: Parameters<NonNullable<ScreenTransport['confirmScaffold']>>[0]) => write(value => transport.confirmScaffold!(value), input) } : {}),
+      ...(transport.expandScaffold ? { expandScaffold: (input: Parameters<NonNullable<ScreenTransport['expandScaffold']>>[0]) => write(value => transport.expandScaffold!(value), input) } : {}),
     };
   }, [transport]);
   function receive(next: Screen) {

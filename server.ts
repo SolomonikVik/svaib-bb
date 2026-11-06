@@ -265,10 +265,9 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     // actual account/company/workspace on every call.
     const configuredSetup = setup && (base.tools?.length ?? 0) > 0;
     const visual = supported && (!setup || finishedSetup || configuredSetup) ? screen.configure(context) : { tools: [], skills: [] };
-    const ordinaryScreenGuidance = 'Если человек просит открыть или продолжить конструктор пространства, вызови svaib_screen_open в текущем проекте BB с выбранными companyId и companyName без screenId: система найдёт доступные Screen и при нескольких предложит выбор. Не придумывай ID. Сам инструмент проверит папку и доступ; предварительные shell-команды не нужны. Если папка не подходит, следуй сообщению инструмента.';
     const instructions = configuredSetup && base.instructions && visual.instructions
       ? `${base.instructions}\n\nПосле успешного whoami, если согласованный сценарий включает подготовку пространства, продолжи его по правилам пользователя. ${visual.instructions}`
-      : supported && !own ? [base.instructions, ordinaryScreenGuidance].filter(Boolean).join('\n\n') : base.instructions;
+      : supported && !own ? [base.instructions, visual.instructions].filter(Boolean).join('\n\n') : base.instructions;
     return {
       tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? [])])],
       skills: [...new Set([...(base.skills ?? []), ...(visual.skills ?? []), ...(!setup && supported ? [CONNECTION_SKILL] : [])])],

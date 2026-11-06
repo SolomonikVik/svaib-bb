@@ -33,6 +33,7 @@ export function screenRpcBackend(rpc: Rpc, threadId: string, screenId: string,
     submit: (mutation, signal) => call(rpc.call('screen.submit', { ...selector, mutation }), signal),
     update: (mutation, signal) => call(rpc.call('screen.update', { ...selector, mutation }), signal),
     confirmScaffold: (mutation, signal) => call(rpc.call('screen.confirm', { ...selector, mutation }), signal),
+    expandScaffold: (input, signal) => call(rpc.call('screen.expand', {...selector, ...input}), signal),
     events: (input, signal) => {
       const pollId = crypto.randomUUID();
       return call(rpc.call('screen.events', { ...selector, pollId, ...input, timeoutMs: Math.min(input.timeoutMs, 10000) }), signal,

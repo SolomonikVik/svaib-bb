@@ -2,18 +2,34 @@
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, opendir, realpath, type FileHandle } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve, posix } from 'node:path';
 import {
   ScaffoldImportError, hashScaffoldSnapshot, scaffoldImportLimits, maxScaffoldSnapshotBytes,
   canonical, limitsFrom, snapshotEntryBoundary, buildScaffoldOverview, assertScaffoldSnapshot,
   type SnapshotKind, type ScaffoldSnapshot, type SnapshotEntry, type ScaffoldImportLimits,
   type ScaffoldOverviewOptions,
+  type ScaffoldRoleEvidence,
 } from 'bb-plugin-svaib-screen-pilot/scaffold-import';
 export * from 'bb-plugin-svaib-screen-pilot/scaffold-import';
 const fail = (code: ScaffoldImportError['code'], message: string): never => { throw new ScaffoldImportError(code, message); };
 const sha = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 const kindOf = (s: BigIntStats): SnapshotKind => s.isFile() ? 'file' : s.isDirectory() ? 'directory' : s.isSymbolicLink() ? 'symlink' : 'other';
 const same = (a: BigIntStats, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+/** The map supplies a purpose, not template provenance or permission to edit. */
+function readmePurposes(text: string, readme: string): Record<string, ScaffoldRoleEvidence> {
+  const result: Record<string, ScaffoldRoleEvidence> = {};
+  for (const line of text.split('\n')) {
+    const link = /\[([^\]]+)\]\(([^)]+)\)/.exec(line);
+    if (!link) continue;
+    const href = link[2].split('#')[0].replace(/^<|>$/g, '');
+    if (!href || /^(?:[a-z]+:|\/)/i.test(href)) continue;
+    const path = posix.normalize(posix.join(posix.dirname(readme), href)).replace(/\/$/, '').replace(/\/README\.md$/, '');
+    if (!path || path === '.' || path.startsWith('../')) continue;
+    const description = line.slice(link.index + link[0].length).replace(/^\s*(?:[—–-]|\|)\s*/, '').split(/\s*\|\s*|\s*Читать:/)[0].replace(/\*\*/g, '').trim();
+    if (description && !result[path]) result[path] = { role: 'workspace', source: `${readme}: ${description}`.slice(0, 800) };
+  }
+  return result;
+}
 async function openRoot(path: string): Promise<FileHandle> {
   let handle = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
@@ -26,7 +42,8 @@ async function openRoot(path: string): Promise<FileHandle> {
 }
 /** Linux fd-relative traversal: a swapped directory path cannot redirect reads
  * outside the opened root. No symlink target or private/build content is read. */
-async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, signal?: AbortSignal, allowDepthBoundary = false): Promise<ScaffoldSnapshot> {
+async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, signal?: AbortSignal, allowDepthBoundary = false,
+  expandedPaths: string[] = [], purposes: Record<string, ScaffoldRoleEvidence> = {}): Promise<ScaffoldSnapshot> {
   signal?.throwIfAborted();
   if (process.platform !== 'linux') fail('importer_unavailable', 'Для безопасного чтения каркаса нужен поддерживаемый локальный файловый адаптер.');
   if (!isAbsolute(pinnedRoot) || resolve(pinnedRoot) !== pinnedRoot) fail('invalid_root', 'Нужен фактический корень из native-привязки.');
@@ -64,7 +81,8 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
         if (entries.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного Screen.');
         if (entry.opaqueReason) continue;
         if (kind === 'directory') {
-          if (depth >= limits.maxDepth) {
+          const collection = allowDepthBoundary && ['meetings', 'zz_archive'].includes(name);
+          if (!collection && depth >= limits.maxDepth && (depth >= scaffoldImportLimits.maxDepth || !expandedPaths.some(expanded => expanded === path || expanded.startsWith(path + '/')))) {
             if (!allowDepthBoundary) fail('too_large', 'Каркас слишком глубоко вложен для одного Screen.');
             entry.opaqueReason = 'depth_limit';
             continue;
@@ -78,7 +96,19 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
             try { await lstat(`/proc/self/fd/${child.fd}/.svaib`); boundary = true; }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
             if (boundary) entry.opaqueReason = 'workspace_boundary';
-            else entry.childrenHash = await walk(child, path, depth + 1);
+            else if (collection) {
+              const contents: [string, SnapshotKind][] = []; let folders = 0, files = 0;
+              for await (const item of await opendir(`/proc/self/fd/${child.fd}`)) {
+                signal?.throwIfAborted();
+                if (contents.length >= limits.maxEntries) fail('too_large', 'В коллекции слишком много элементов для ограниченного снимка.');
+                const itemKind: SnapshotKind = item.isDirectory() ? 'directory' : item.isFile() ? 'file' : item.isSymbolicLink() ? 'symlink' : 'other';
+                contents.push([item.name, itemKind]);
+                if (itemKind === 'directory') folders++; else if (itemKind === 'file') files++;
+              }
+              entry.opaqueReason = `collection:${folders}:${files}`;
+              entry.childrenHash = sha(canonical(contents.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)));
+              if (!same(before, await child.stat({bigint: true}))) fail('snapshot_changed', 'Папка изменилась во время чтения. Повторите импорт.');
+            } else entry.childrenHash = await walk(child, path, depth + 1);
           } finally { await child.close(); }
         } else if (kind === 'file') {
           const file = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -86,6 +116,7 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
             const opened = await file.stat({ bigint: true });
             if (!opened.isFile() || !same(before, opened)) fail('snapshot_changed', 'Файл изменился во время чтения. Повторите импорт.');
             const digest = createHash('sha256'); const buffer = Buffer.alloc(Math.min(limits.maxFileBytes + 1, 64 * 1024)); let size = 0;
+            const readmeChunks: Buffer[] | undefined = allowDepthBoundary && name === 'README.md' ? [] : undefined;
             for (;;) {
               signal?.throwIfAborted();
               const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, limits.maxFileBytes + 1 - size), null);
@@ -93,9 +124,14 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
               size += bytesRead; totalBytes += bytesRead;
               if (size > limits.maxFileBytes || totalBytes > limits.maxTotalBytes) fail('too_large', 'Превышен объём безопасного снимка каркаса.');
               digest.update(buffer.subarray(0, bytesRead));
+              readmeChunks?.push(Buffer.from(buffer.subarray(0, bytesRead)));
             }
             if (BigInt(size) !== opened.size || !same(opened, await file.stat({ bigint: true }))) fail('snapshot_changed', 'Файл изменился во время чтения. Повторите импорт.');
             entry.sha256 = digest.digest('hex');
+            if (readmeChunks) for (const [target, evidence] of Object.entries(readmePurposes(Buffer.concat(readmeChunks).toString('utf8'), path))) {
+              const previous = purposes[target]?.source.split(':')[0];
+              if (!previous || posix.dirname(path) === posix.dirname(target) || posix.dirname(previous) !== posix.dirname(target)) purposes[target] = evidence;
+            }
           } finally { await file.close(); }
         }
         if (!same(before, await lstat(filePath, { bigint: true }))) fail('snapshot_changed', 'Каркас изменился во время чтения. Повторите импорт.');
@@ -107,7 +143,8 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
     const afterRoot = await lstat(pinnedRoot, { bigint: true });
     if (!same(rootStat, afterRoot) || await realpath(pinnedRoot) !== pinnedRoot) fail('snapshot_changed', 'Корень изменился во время чтения. Повторите импорт.');
     entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-    const value = { schemaVersion: 1 as const, root: { realPath: pinnedRoot, device: String(rootStat.dev), inode: String(rootStat.ino) }, entries, ignoredRoots: entries.filter(e => e.kind === 'directory' && e.opaqueReason !== null).map(e => e.path), limits };
+    const value = { schemaVersion: 1 as const, root: { realPath: pinnedRoot, device: String(rootStat.dev), inode: String(rootStat.ino) }, entries, ignoredRoots: entries.filter(e => e.kind === 'directory' && e.opaqueReason !== null).map(e => e.path), limits,
+      ...(expandedPaths.length ? {expandedPaths: [...expandedPaths].sort()} : {}) };
     const snapshot = { ...value, hash: hashScaffoldSnapshot(value) };
     if (Buffer.byteLength(JSON.stringify(snapshot)) > maxScaffoldSnapshotBytes) fail('too_large', 'Снимок каркаса слишком велик для безопасного сохранения.');
     return snapshot;
@@ -118,12 +155,16 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
   } finally { await root.close(); }
 }
 export async function importScaffold(pinnedRoot: string, options: ScaffoldOverviewOptions & { limits?: Partial<ScaffoldImportLimits>; signal?: AbortSignal }): Promise<{ snapshot: ScaffoldSnapshot; scaffoldConfig: ReturnType<typeof buildScaffoldOverview> }> {
-  const snapshot = await readSnapshot(pinnedRoot, limitsFrom(options.limits), options.signal, options.allowDepthBoundary === true);
-  return { snapshot, scaffoldConfig: buildScaffoldOverview(snapshot, options) };
+  const purposes: Record<string, ScaffoldRoleEvidence> = {};
+  const snapshot = await readSnapshot(pinnedRoot, limitsFrom(options.limits), options.signal, options.allowDepthBoundary === true, options.expandedPaths, purposes);
+  const paths = new Set(snapshot.entries.filter(entry => entry.kind === 'file').map(entry => entry.path));
+  const inferred = Object.fromEntries(Object.entries(purposes).filter(([path]) => paths.has(path)));
+  return { snapshot, scaffoldConfig: buildScaffoldOverview(snapshot, {...options, purposes: inferred}) };
 }
 export async function verifyScaffoldSnapshot(pinnedRoot: string, snapshot: ScaffoldSnapshot, signal?: AbortSignal): Promise<void> {
   assertScaffoldSnapshot(snapshot);
   if (snapshot.root.realPath !== pinnedRoot) fail('snapshot_changed', 'Рабочий корень изменился. Повторите импорт.');
-  const current = await readSnapshot(pinnedRoot, limitsFrom(snapshot.limits), signal, snapshot.entries.some(entry => entry.opaqueReason === 'depth_limit'));
+  const current = await readSnapshot(pinnedRoot, limitsFrom(snapshot.limits), signal,
+    snapshot.entries.some(entry => entry.opaqueReason === 'depth_limit' || entry.opaqueReason?.startsWith('collection:')), snapshot.expandedPaths);
   if (current.hash !== snapshot.hash) fail('snapshot_changed', 'Каркас изменился после снимка. Повторите импорт и согласуйте новый пакет.');
 }

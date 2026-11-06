@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { scaffoldCatalog, scaffoldConfigSchema, type AnyScaffoldConfig } from './scaffold';
+import {scaffoldVisibilityPolicy, technicalScaffoldPath} from './scaffold-tree-model';
 
 export type ScaffoldTreeConfig = Extract<AnyScaffoldConfig, { schemaVersion: 2 }>;
 export type ScaffoldRoleEvidence = { role: 'unit' | 'aspect' | 'kit' | 'infrastructure' | 'workspace'; source: string };
@@ -14,6 +15,7 @@ export type ScaffoldImportLimits = { maxEntries: number; maxDepth: number; maxFi
 export type ScaffoldSnapshot = {
   schemaVersion: 1; root: { realPath: string; device: string; inode: string };
   entries: SnapshotEntry[]; ignoredRoots: string[]; limits: ScaffoldImportLimits; hash: string;
+  expandedPaths?: string[];
 };
 export const scaffoldImportLimits: Readonly<ScaffoldImportLimits> = Object.freeze({ maxEntries: 600, maxDepth: 12, maxFileBytes: 1024 * 1024, maxTotalBytes: 8 * 1024 * 1024 });
 export const maxScaffoldSnapshotBytes = 224 * 1024;
@@ -30,12 +32,12 @@ export function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 export function hashScaffoldSnapshot(snapshot: Omit<ScaffoldSnapshot, 'hash'> | ScaffoldSnapshot): string {
-  const { schemaVersion, root, entries, ignoredRoots, limits } = snapshot;
+  const { schemaVersion, root, entries, ignoredRoots, limits, expandedPaths } = snapshot;
   // Opaque directories are outside coverage: their changing contents must not
   // invalidate the visible snapshot, but identity and the opaque boundary remain bound.
   const covered = entries.map(entry => entry.kind === 'directory' && entry.opaqueReason !== null
     ? { ...entry, size: 0, mtimeNs: 'opaque' } : entry);
-  return sha(canonical({ schemaVersion, root, entries: covered, ignoredRoots, limits }));
+  return sha(canonical({ schemaVersion, root, entries: covered, ignoredRoots, limits, ...(expandedPaths ? {expandedPaths} : {}) }));
 }
 export function limitsFrom(input: Partial<ScaffoldImportLimits> = {}): ScaffoldImportLimits {
   const limits = { ...scaffoldImportLimits, ...input };
@@ -46,15 +48,14 @@ export function limitsFrom(input: Partial<ScaffoldImportLimits> = {}): ScaffoldI
   return limits;
 }
 export const validName = (name: string) => name.length <= 150 && !/[:\\/\u0000-\u001f]/.test(name) && !['.', '..'].includes(name);
-export const scaffoldTechnicalNames = new Set(['.git', '.idea', '.vscode', '.fleet', '.cursor', '.claude', '.codex', '.agents', '.bb', '.cache', '.ssh', '.aws', '.azure', '.config', '.local', '.gnupg', '.npm', '.yarn', '.pnpm-store', '.pytest_cache', '.ruff_cache', '.mypy_cache', '.tox', '.gradle', '.venv', '.next', '.nuxt', '.turbo', '.DS_Store', '.gitignore', '.gitattributes', '.gitmodules', '.editorconfig', '.mcp.json', '.npmrc', '.yarnrc', '.yarnrc.yml', 'AGENTS.md', 'CLAUDE.md', 'node_modules', 'dist', 'build', 'coverage', '__pycache__', 'venv', 'target', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'uv.lock', 'poetry.lock']);
+export const scaffoldTechnicalNames = new Set(scaffoldVisibilityPolicy.technicalNames);
 export function snapshotEntryBoundary(path: string, kind: SnapshotKind): string | null {
   const name = path.split('/').at(-1)!;
   if (kind === 'symlink') return 'symlink';
   if (kind === 'other') return 'special';
   if (!validName(name)) return 'unsupported_name';
   if (name === '_private') return 'private';
-  if (kind === 'directory' && (scaffoldTechnicalNames.has(name) || /^\.svaib\/(usage|cache)(\/|$)/.test(path))) return 'excluded';
-  if (scaffoldTechnicalNames.has(name)) return 'excluded';
+  if (technicalScaffoldPath(path)) return /^\.env(?:\.|$)/i.test(name) || (kind === 'file' && /^\.svaib\//.test(path)) ? 'sensitive' : 'excluded';
   if (/^\.env(?:\.|$)/i.test(name) || (kind === 'file' && /^\.svaib\//.test(path))) return 'sensitive';
   return null;
 }
@@ -73,6 +74,8 @@ function canonicalRole(path: string, kind: SnapshotKind): ScaffoldRoleEvidence |
     return { role: 'infrastructure', source: 'Канон служебных папок scaffold.' };
   if (kind === 'file' && name === 'README.md')
     return { role: 'infrastructure', source: 'Карта папки по канону README.' };
+  if (kind === 'file' && ['AGENTS.md', 'CLAUDE.md'].includes(name))
+    return { role: 'infrastructure', source: 'Правила работы агента в пространстве.' };
   if (kind === 'file' && path === '00_ceo/01_profile.md')
     return { role: 'workspace', source: 'Профиль CEO: отдельный документ, не элемент management kit.' };
   if (/^0[1-5]_(overview|active|backlog|progress|decisions)(\.md)?$/.test(name)) {
@@ -80,7 +83,7 @@ function canonicalRole(path: string, kind: SnapshotKind): ScaffoldRoleEvidence |
     if (names.includes(name.replace(/\.md$/, '')))
       return { role: 'kit', source: 'Канон management kit: миссия сохраняется в форме файла и папки.' };
   }
-  if (path === '01_company' && kind === 'directory') return { role: 'unit', source: 'Компания: обязательный узел пространства.' };
+  if (['01_company', '00_ceo'].includes(path) && kind === 'directory') return { role: 'unit', source: path === '00_ceo' ? 'Канон: личный управленческий контекст CEO.' : 'Компания: обязательный узел пространства.' };
   return undefined;
 }
 function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Record<string, ScaffoldRoleEvidence>): ScaffoldTreeConfig {
@@ -98,7 +101,9 @@ function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Reco
     const role = evidence?.role ?? (folder && entry.path === '01_company' ? 'unit' : 'root');
     const unit = folder && role === 'unit';
     const locked = entry.opaqueReason !== null || protectedParents.has(parent) || (folder && hiddenParents.has(entry.path));
-    const note = [locked ? 'Сохранить без раскрытия и автоматических изменений.' : '', evidence ? `Основание: ${evidence.source}` : role === 'root' ? 'Роль не определена; требуется разбор.' : 'Компания: обязательный узел пространства.'].filter(Boolean).join(' ');
+    const collection = entry.opaqueReason?.match(/^collection:(\d+):(\d+)$/);
+    const boundary = collection ? `Содержимое: папок — ${collection[1]}, файлов — ${collection[2]}.` : entry.opaqueReason === 'depth_limit' ? 'Не загружено.' : entry.opaqueReason === 'private' ? 'Приватное. Содержимое скрыто.' : locked ? 'Содержимое не раскрыто.' : '';
+    const note = [boundary, evidence ? `Основание: ${evidence.source}` : role === 'root' ? 'Роль не определена.' : ''].filter(Boolean).join(' ');
     tree.push({ ...root, id: itemId(entry.path), parentId: parent ? itemId(parent) : 'root', name, type: folder ? 'folder' : 'file', note, role, locked, acceptsBlocks: unit && !locked, projectContainer: false, screenKind: unit ? entry.path === '00_ceo' ? 'ceo' : 'unit' : null });
     if (folder) { visible.add(entry.path); if (locked) protectedParents.add(entry.path); }
   }
@@ -116,6 +121,7 @@ export const scaffoldSnapshotSchema = z.object({
     size: z.number().int().nonnegative(), mtimeNs: z.string(), sha256: z.string().nullable(), childrenHash: z.string().nullable(), opaqueReason: z.string().nullable(),
   }).strict()).max(scaffoldImportLimits.maxEntries),
   ignoredRoots: z.array(relativePath).max(scaffoldImportLimits.maxEntries),
+  expandedPaths: z.array(relativePath).max(100).optional(),
   limits: z.object({maxEntries: z.number().int().min(1).max(scaffoldImportLimits.maxEntries), maxDepth: z.number().int().min(1).max(scaffoldImportLimits.maxDepth),
     maxFileBytes: z.number().int().min(1).max(scaffoldImportLimits.maxFileBytes), maxTotalBytes: z.number().int().min(1).max(scaffoldImportLimits.maxTotalBytes)}).strict(),
   hash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -132,11 +138,11 @@ export const scaffoldSnapshotSchema = z.object({
   }
 });
 
-export type ScaffoldOverviewOptions = { companyName: string; roles?: Record<string, ScaffoldRoleEvidence>; previousConfig?: ScaffoldTreeConfig; allowDepthBoundary?: boolean };
+export type ScaffoldOverviewOptions = { companyName: string; roles?: Record<string, ScaffoldRoleEvidence>; purposes?: Record<string, ScaffoldRoleEvidence>; previousConfig?: ScaffoldTreeConfig; allowDepthBoundary?: boolean; expandedPaths?: string[] };
 /** Same classification for every harness; consumes data, never chooses or reads a local root. */
 export function buildScaffoldOverview(snapshot: ScaffoldSnapshot, options: ScaffoldOverviewOptions): ScaffoldTreeConfig {
   assertScaffoldSnapshot(snapshot);
-  const roles = { ...options.roles };
+  const roles = { ...options.purposes, ...options.roles };
   const entries = new Set(snapshot.entries.map(entry => entry.path));
   if (options.previousConfig) {
     const nodes = new Map(options.previousConfig.tree.map(node => [node.id, node]));
@@ -145,7 +151,8 @@ export function buildScaffoldOverview(snapshot: ScaffoldSnapshot, options: Scaff
       const parts = []; let cursor = node;
       while (cursor.parentId) { parts.unshift(cursor.name); cursor = nodes.get(cursor.parentId)!; }
       const path = parts.join('/');
-      if (entries.has(path) && !Object.hasOwn(roles, path)) roles[path] = { role: node.role, source: node.note.includes('Основание: ') ? node.note.split('Основание: ')[1] : node.note };
+      if (entries.has(path) && !Object.hasOwn(options.roles ?? {}, path) && (node.role !== 'workspace' || !Object.hasOwn(roles, path)))
+        roles[path] = { role: node.role, source: node.note.includes('Основание: ') ? node.note.slice(node.note.indexOf('Основание: ') + 'Основание: '.length) : node.note };
     }
   }
   for (const [path, evidence] of Object.entries(roles)) {
