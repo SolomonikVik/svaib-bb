@@ -4,6 +4,7 @@ import { kimiRpcContract, kimiViewSchema, type KimiAgent, type KimiView } from '
 
 const PROVIDER = 'acp-claude-kimi';
 const SETTINGS_PLUGIN = 'provider-acp';
+const PREFERRED_MODEL = 'k3.1-pro[1m]';
 
 /** Owns only local Kimi UI state. It never reads/writes svaib onboarding marks. */
 export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) {
@@ -11,13 +12,15 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   const storageKey = 'kimi-setup:v1:' + (hostId ?? 'unavailable');
   const saved = kimiViewSchema.safeParse(await bb.storage.kv.get(storageKey));
   let view: KimiView = saved.success ? saved.data : {
-    revision: 0, canReplaceKey: false, hidden: false, stage: 'intro', message: '', hostId: hostId ?? '', testThreadId: null, manualRegistration: null,
+    revision: 0, canReplaceKey: false, hidden: false, stage: 'intro', message: '', hostId: hostId ?? '', testThreadId: null, verifyModel: null, manualRegistration: null, keyChangedAt: null,
   };
   let job: Promise<void> | null = null;
   let starting: Promise<KimiView> | null = null;
+  let replacing = false;
   let disposed = false;
   const abort = new AbortController();
   bb.onDispose(() => { disposed = true; abort.abort(); });
+  const occupied = () => !!job || !!starting || replacing;
   const snapshot = () => ({ ...view });
   async function save(patch: Partial<KimiView>) {
     if (disposed) return snapshot();
@@ -46,12 +49,35 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       catch { return false; }
     }
   }
+  function sameRegistration(current: Record<string, unknown> | undefined, agent: KimiAgent) {
+    return !!current && current.command === agent.command && JSON.stringify(current.args) === JSON.stringify(agent.args);
+  }
+  /** Only seed models confirmed by this host's provider catalog. */
+  async function resolveVerifyModel(): Promise<string | null> {
+    if (!hostId) return null;
+    try {
+      const catalog = await bb.sdk.providers.models({ hostId, providerId: PROVIDER });
+      if (catalog.modelLoadError || !catalog.providers.some(provider => provider.id === PROVIDER && provider.available)) return null;
+      const models = catalog.models.filter(model => !model.routeProviderId || model.routeProviderId === PROVIDER);
+      return (models.find(model => model.id === PREFERRED_MODEL) ?? models.find(model => model.isDefault) ?? models[0])?.id ?? null;
+    } catch { return null; }
+  }
   async function inspect() {
-    if (await hasProvider()) return save({ stage: 'verify', message: 'Kimi уже добавлен. Проверим ответ в обычном разговоре BB.' });
+    if (await hasProvider()) {
+      const verifyModel = await resolveVerifyModel();
+      const patch: Partial<KimiView> = { stage: 'verify', verifyModel,
+        message: verifyModel ? 'Kimi уже добавлен. Проверим ответ в обычном разговоре BB.' : 'Не удалось получить модели Kimi. Проверь, что компьютер BB подключён, и повтори проверку.', canReplaceKey: false };
+      try {
+        const status = await client.call('kimiInspect', null, target());
+        patch.canReplaceKey = !!status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
+      } catch { /* Ownership must be confirmed before offering replacement. */ }
+      return save(patch);
+    }
     const status = await client.call('kimiInspect', null, target());
     return save({ stage: !status.nodeReady ? 'node' : status.profile === 'blocked' ? 'blocked'
       : status.profile === 'absent' ? 'key' : 'registration',
     message: status.profile === 'blocked' ? 'Папка настройки изменена. Существующие файлы сохранены; нужна помощь партнёра.' : '',
+    canReplaceKey: false, verifyModel: null,
     });
   }
   async function register(agent: KimiAgent) {
@@ -66,15 +92,15 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       }
       const actual = await agents();
       if (!actual.some(item => item.id === agent.id)) throw new Error('Registration not saved');
-      return save({ stage: 'verify', message: '', manualRegistration: null,
-        canReplaceKey: !existing || existing.command === agent.command && JSON.stringify(existing.args) === JSON.stringify(agent.args) });
+      return save({ stage: 'verify', message: '', manualRegistration: null, verifyModel: await resolveVerifyModel(),
+        canReplaceKey: !existing || sameRegistration(existing, agent) });
     } catch {
       return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([agent], null, 2) });
     }
   }
   async function start(apiKey?: string) {
-    if (job) return snapshot();
-    if (await hasProvider()) return save({ stage: 'verify', hidden: false, message: 'Существующее подключение сохранено. Проверим ответ Kimi.' });
+    if (job || replacing) return snapshot();
+    if (await hasProvider()) return save({ stage: 'verify', hidden: false, verifyModel: await resolveVerifyModel(), message: 'Существующее подключение сохранено. Проверим ответ Kimi.' });
     const status = await client.call('kimiInspect', null, target());
     if (!status.nodeReady || status.profile === 'blocked' || status.profile === 'absent' && !apiKey) return inspect();
     await save({ hidden: false, stage: 'installing', message: '', manualRegistration: null });
@@ -105,7 +131,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   }
   async function checkResponse(quiet = false) {
     const testId = view.testThreadId;
-    const current = () => view.testThreadId === testId && view.stage === 'verify' && !view.hidden;
+    const current = () => !occupied() && view.testThreadId === testId && view.stage === 'verify' && !view.hidden;
     const pending = (message: string) => quiet || !current() ? Promise.resolve(snapshot()) : save({ message });
     if (!view.testThreadId) return pending('Сначала отправь проверочный запрос Kimi.');
     try {
@@ -123,7 +149,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   bb.rpc.register(kimiRpcContract, {
     kimiStatus: async () => {
       if (!view.hidden && view.stage === 'verify' && view.testThreadId) return checkResponse(true);
-      if (view.stage === 'installing' && !job && !view.hidden) {
+      if (view.stage === 'installing' && !occupied() && !view.hidden) {
         try { return await inspect(); }
         catch { return save({ stage: 'registration', message: 'Подключи компьютер BB и продолжи настройку.' }); }
       }
@@ -132,7 +158,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     kimiOpen: async () => {
       if (view.stage === 'complete') return snapshot();
       await save({ hidden: false });
-      if (job) return snapshot();
+      if (occupied()) return snapshot();
       try { return await inspect(); }
       catch { return save({ stage: 'blocked', message: 'Не удалось связаться с компьютером BB. Проверь подключение и повтори.' }); }
     },
@@ -142,28 +168,42 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       return starting;
     },
     kimiDismiss: async ({ reason }) => {
-      if (job || starting) throw new Error('Дождись завершения текущего шага.');
+      if (occupied()) throw new Error('Дождись завершения текущего шага.');
       return save({ hidden: true, message: reason === 'other-agent' ? 'Выбран другой агент.' : '' });
     },
     kimiTestStarted: async ({ threadId }) => {
-      await checkedThread(threadId, false);
+      if (occupied()) throw new Error('Дождись завершения текущего шага.');
+      const keyChangedAt = view.keyChangedAt;
+      const thread = await checkedThread(threadId, false);
+      // Recheck after I/O: a replacement may have begun or finished meanwhile.
+      if (occupied() || view.keyChangedAt !== keyChangedAt) throw new Error('Настройка изменилась. Отправь новый проверочный запрос.');
+      if (keyChangedAt !== null && thread.createdAt <= keyChangedAt) throw new Error('Разговор создан до замены ключа. Отправь новый проверочный запрос.');
       await save({ stage: 'verify', testThreadId: threadId, message: '' });
       return checkResponse();
     },
     kimiCheckResponse: () => checkResponse(),
     kimiRecheck: async () => {
-      if (job || starting) return snapshot();
+      if (occupied()) return snapshot();
       await save({ hidden: false, stage: 'intro', testThreadId: null, message: '' });
       return inspect();
     },
     kimiReplaceKey: async ({ apiKey }) => {
-      if (!view.canReplaceKey || job || starting) throw new Error('Этот профиль не принадлежит настройщику.');
-      const status = await client.call('kimiInspect', null, target());
-      const current = (await agents()).find(item => item.id === 'claude-kimi');
-      if (!status.agent || current?.command !== status.agent.command || JSON.stringify(current.args) !== JSON.stringify(status.agent.args)) throw new Error('Регистрация Kimi изменилась. Существующее подключение сохранено.');
-      await save({ stage: 'verify', hidden: false, testThreadId: null, message: '' });
-      await client.call('kimiReplaceKey', { apiKey }, target());
-      return save({ stage: 'verify', testThreadId: null, message: 'Ключ обновлён. Отправь новый проверочный запрос.' });
+      if (!view.canReplaceKey || occupied()) throw new Error('Этот профиль не принадлежит настройщику.');
+      replacing = true;
+      try {
+        const status = await client.call('kimiInspect', null, target());
+        const current = (await agents()).find(item => item.id === 'claude-kimi');
+        if (!status.agent || !sameRegistration(current, status.agent)) throw new Error('Регистрация Kimi изменилась. Существующее подключение сохранено.');
+        // The installing interlude keeps checkResponse off: a late reply of the
+        // old key must not complete setup while the key is being replaced.
+        await save({ hidden: false, stage: 'installing', message: '' });
+        await client.call('kimiReplaceKey', { apiKey }, target());
+        const keyChangedAt = Date.now();
+        return save({ stage: 'verify', hidden: false, testThreadId: null, keyChangedAt, verifyModel: view.verifyModel ?? await resolveVerifyModel(), message: 'Ключ обновлён. Отправь новый проверочный запрос.' });
+      } catch (error) {
+        if (view.stage === 'installing') await save({ stage: 'verify', message: 'Не удалось обновить ключ. Ключ и проверка не изменились; повтори позже.' });
+        throw error;
+      } finally { replacing = false; }
     },
   });
   return { settled: async () => { await job; } };

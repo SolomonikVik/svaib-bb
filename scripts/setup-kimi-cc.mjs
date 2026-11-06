@@ -1,11 +1,8 @@
-#!/usr/bin/env node
-// First-run setup works before BB has an agent. Never put keys in BB settings.
+// Internal provisioning module for the BB Kimi card. Never put keys in BB settings.
 import { access, chmod, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { emitKeypressEvents } from 'node:readline';
 
 export const ADAPTER = '@agentclientprotocol/claude-agent-acp@0.100.0';
 const MODEL = 'k3.1-pro[1m]';
@@ -134,50 +131,4 @@ async function sameOrNew(path, content) {
   catch (error) {
     if (error.code !== 'EEXIST' || (await lstat(path)).isSymbolicLink() || await readFile(path, 'utf8') !== content) throw error;
   }
-}
-
-async function secret() {
-  if (!process.stdin.isTTY) throw new Error('Запусти настройщик в обычном локальном терминале: ключ вводится скрыто.');
-  process.stdout.write('Ключ Kimi Code (ввод скрыт): ');
-  emitKeypressEvents(process.stdin);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  return new Promise((yes, no) => {
-    let value = '';
-    const finish = () => { process.stdin.off('keypress', key); process.stdin.setRawMode(false); process.stdin.pause(); process.stdout.write('\n'); };
-    const key = (text, event = {}) => {
-      if (event.ctrl && event.name === 'c') { finish(); no(new Error('Настройка отменена.')); }
-      else if (event.name === 'return') { finish(); yes(value.trim()); }
-      else if (event.name === 'backspace') value = value.slice(0, -1);
-      else if (text && !event.ctrl && !event.meta) value += text;
-    };
-    process.stdin.on('keypress', key);
-  });
-}
-
-async function main() {
-  if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Нужен Node.js 22 или новее.');
-  if (process.argv.length > 2) throw new Error('Запусти без аргументов. Ключ не передают в командной строке.');
-  const root = join(homedir(), '.bb', 'providers', 'kimi-cc');
-  let exists = false;
-  try { await lstat(root); exists = true; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (exists) {
-  try {
-    // Re-running never overwrites credentials, reinstalls dependencies or migrates an old provider.
-    const saved = JSON.parse(await readFile(join(root, 'bb-agent.json'), 'utf8'));
-    if (saved.id !== 'claude-kimi') throw new Error('Папка занята другим профилем.');
-    console.log('Профиль уже подготовлен. Существующие настройки сохранены.');
-    console.log(JSON.stringify([saved], null, 2));
-    return;
-  } catch (error) { throw new Error(error.code === 'ENOENT' ? 'Сохранилась незавершённая настройка Kimi. Ничего не перезаписано; обратись к помощнику.' : error.message); }
-  }
-  const agent = await provision({ root, apiKey: await secret() });
-  console.log('Профиль подготовлен. В BB: Settings → Plugins → ACP providers → Custom agents.');
-  console.log('Если список пуст, вставь массив ниже. Если записи есть, сохрани их и попроси помощника добавить Kimi:');
-  console.log(JSON.stringify([agent], null, 2));
-  console.log('Затем открой обычный разговор: Kimi (CC) → Kimi K3.1 Pro (1M). Нужен реальный ответ модели.');
-}
-
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  main().catch(error => { console.error(error.code === 'EEXIST' ? 'Профиль уже существует; ничего не перезаписано. Обратись к помощнику.' : error.message); process.exitCode = 1; });
 }

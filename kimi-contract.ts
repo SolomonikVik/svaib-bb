@@ -21,7 +21,9 @@ export const kimiViewSchema = z.object({
   revision: z.number().int().nonnegative(),
   canReplaceKey: z.boolean(),
   hidden: z.boolean(), stage: z.enum(['intro', 'node', 'key', 'installing', 'registration', 'verify', 'complete', 'blocked']),
-  message: z.string(), hostId: z.string(), testThreadId: z.string().nullable(), manualRegistration: z.string().nullable(),
+  message: z.string(), hostId: z.string(), testThreadId: z.string().nullable(),
+  verifyModel: z.string().nullable().default(null), manualRegistration: z.string().nullable(),
+  keyChangedAt: z.number().nullable().default(null),
 }).strict();
 export type KimiView = z.infer<typeof kimiViewSchema>;
 export const kimiRpcContract = defineRpcContract({
