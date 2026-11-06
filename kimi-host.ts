@@ -1,14 +1,26 @@
 import { spawn } from 'node:child_process';
 import { lstat, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { provision, resumeProvision, registration, npmCliPath, ADAPTER } from './scripts/setup-kimi-cc.mjs';
+import { join, posix, win32 } from 'node:path';
+import { provision, resumeProvision, registration, upgradeProvision, ADAPTER } from './scripts/setup-kimi-cc.mjs';
 import { kimiAgentSchema } from './kimi-contract';
+import { ensureKimiRuntime, existingKimiRuntime } from './kimi-runtime';
+
+/** Windows environment names are case-insensitive, including inside host workers. */
+export function kimiCommandEnvironment(executable: string, environment: NodeJS.ProcessEnv = process.env, platform: string = process.platform) {
+  const env = { ...environment };
+  const paths = platform === 'win32' ? win32 : posix;
+  const pathKeys = Object.keys(env).filter(key => platform === 'win32' ? key.toLowerCase() === 'path' : key === 'PATH');
+  const inherited = pathKeys.map(key => env[key]).filter(Boolean).join(paths.delimiter);
+  for (const key of pathKeys) delete env[key];
+  env[platform === 'win32' ? 'Path' : 'PATH'] = paths.dirname(executable) + paths.delimiter + inherited;
+  return env;
+}
 
 /** The only commands run by setup: a bounded Node probe and pinned npm install. */
 export function kimiCommand(executable: string, args: string[], signal: AbortSignal, capture = false): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { signal, shell: false, windowsHide: true, stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'] });
+    const child = spawn(executable, args, { signal, shell: false, windowsHide: true, env: kimiCommandEnvironment(executable), stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'] });
     let output = '';
     const timer = setTimeout(() => { child.kill(); reject(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.')); }, capture ? 5_000 : 180_000);
     child.stdout?.on('data', chunk => {
@@ -23,11 +35,7 @@ export function kimiCommand(executable: string, args: string[], signal: AbortSig
   });
 }
 async function node(signal: AbortSignal) {
-  try {
-    const result = JSON.parse(await kimiCommand(process.platform === 'win32' ? 'node.exe' : 'node', ['-p', 'JSON.stringify({executable:process.execPath,version:process.versions.node})'], signal, true));
-    if (typeof result.executable !== 'string' || typeof result.version !== 'string') return null;
-    return result as { executable: string; version: string };
-  } catch { return null; }
+  return existingKimiRuntime(signal);
 }
 async function regular(path: string, directory = false) {
   const info = await lstat(path);
@@ -35,9 +43,7 @@ async function regular(path: string, directory = false) {
 }
 export async function inspectKimi(root: string, signal: AbortSignal) {
   const runtime = await node(signal);
-  let npmReady = false;
-  if (runtime) { try { await npmCliPath(runtime.executable); npmReady = true; } catch { /* Manual prerequisite. */ } }
-  const base = { nodeReady: Boolean(runtime && npmReady && Number(runtime.version.split('.')[0]) >= 22), nodeVersion: runtime?.version ?? null };
+  const base = { nodeReady: Boolean(runtime), nodeVersion: runtime?.version ?? null };
   try { await regular(root, true); }
   catch (error) {
     return { ...base, profile: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' as const : 'blocked' as const, agent: null };
@@ -52,22 +58,20 @@ export async function inspectKimi(root: string, signal: AbortSignal) {
       throw error;
     }
     const agent = kimiAgentSchema.parse(JSON.parse(await readFile(join(root, 'bb-agent.json'), 'utf8')));
-    if (JSON.stringify(agent) !== JSON.stringify(registration(root, owner.nodeExecutable))) throw new Error();
+    if (![false, true, 'catalog' as const].some(legacy => JSON.stringify(agent) === JSON.stringify(registration(root, owner.nodeExecutable, legacy)))) throw new Error();
     return { ...base, profile: 'ready' as const, agent };
   } catch { return { ...base, profile: 'blocked' as const, agent: null }; }
 }
 export async function prepareKimi(root: string, apiKey: string | undefined, signal: AbortSignal) {
   signal.throwIfAborted();
   const status = await inspectKimi(root, signal);
-  if (!status.nodeReady) throw new Error('Установи Node.js 22 или новее и повтори проверку.');
-  if (status.profile === 'ready') return status.agent!;
+  if (status.profile === 'ready') return upgradeProvision(root);
   if (status.profile === 'blocked') throw new Error('Папка настройки изменена. Существующие файлы сохранены; нужна помощь партнёра.');
   const install = async (executable: string, args: string[]) => { await kimiCommand(executable, args, signal); };
-  if (status.profile === 'partial') return resumeProvision({ root, install });
+  const runtime = await ensureKimiRuntime(root, signal);
+  if (status.profile === 'partial') return resumeProvision({ root, install, npmCli: runtime.npmCli, nodeExecutable: runtime.executable });
   if (!apiKey) throw new Error('Введи ключ из консоли Kimi Code.');
-  const runtime = await node(signal);
-  if (!runtime) throw new Error('Не удалось проверить Node.js.');
-  return provision({ root, apiKey, install, nodeExecutable: runtime.executable });
+  return provision({ root, apiKey, install, nodeExecutable: runtime.executable, npmCli: runtime.npmCli });
 }
 
 export async function replaceKimiKey(root: string, apiKey: string, signal: AbortSignal) {

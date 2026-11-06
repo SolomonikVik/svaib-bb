@@ -50,8 +50,8 @@
 .svb-client-scenario > .svb-client-arrow { position: absolute; right: 17px; top: 18px; width: 16px; height: 16px; opacity: .75; }
 .svb-client-scenario h2 { font-size: 14px; font-weight: 600; letter-spacing: -.25px; line-height: 1.4; }
 .svb-client-scenario p { font-size: 11px; line-height: 1.6; opacity: .8; margin-top: 8px; }
-button.svb-client-scenario { transition: transform .16s, box-shadow .16s; }
-button.svb-client-scenario:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 14px #2C3E5015; }
+button.svb-client-scenario, a.svb-client-scenario { transition: transform .16s, box-shadow .16s; text-decoration: none; }
+button.svb-client-scenario:hover:not(:disabled), a.svb-client-scenario:hover { transform: translateY(-2px); box-shadow: 0 6px 14px #2C3E5015; }
 .svb-client-work { margin-top: 28px; }
 .svb-client-work > header { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 12px; }
 .svb-client-work h2 { font-size: 15px; font-weight: 600; letter-spacing: -.3px; }
@@ -85,6 +85,6 @@ button.svb-client-scenario:hover:not(:disabled) { transform: translateY(-2px); b
   .svb-client-work-links { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .svb-client-guide > summary > .svb-client-arrow, button.svb-client-scenario { transition: none; }
-  button.svb-client-scenario:hover:not(:disabled) { transform: none; }
+  .svb-client-guide > summary > .svb-client-arrow, button.svb-client-scenario, a.svb-client-scenario { transition: none; }
+  button.svb-client-scenario:hover:not(:disabled), a.svb-client-scenario:hover { transform: none; }
 }

@@ -45,7 +45,7 @@ export interface ClientHub {
   cards: {
     id: string; title: string; description: string;
     icon: 'meeting' | 'client' | 'proposal';
-    actionId?: string; sourceId?: string;
+    actionId?: string; sourceId?: string; url?: string;
   }[];
   workSourceIds: string[];
 }

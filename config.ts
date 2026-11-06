@@ -54,8 +54,8 @@ export const clientHubSchema: z.ZodType<ClientHub> = z.object({
   cards: z.array(z.object({
     id: idSchema, title: z.string().min(1).max(160), description: z.string().max(1200),
     icon: z.enum(['meeting', 'client', 'proposal']),
-    actionId: idSchema.optional(), sourceId: idSchema.optional(),
-  }).strict().refine(card => !(card.actionId && card.sourceId), 'У клиентской карточки может быть только одно назначение.')).max(12),
+    actionId: idSchema.optional(), sourceId: idSchema.optional(), url: url.optional(),
+  }).strict().refine(card => [card.actionId, card.sourceId, card.url].filter(Boolean).length <= 1, 'У клиентской карточки может быть только одно назначение.')).max(12),
   workSourceIds: z.array(idSchema).max(50),
 }).strict();
 export const personalSchema: z.ZodType<PersonalSpace> = z.object({

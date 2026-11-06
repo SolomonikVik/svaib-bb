@@ -1,9 +1,11 @@
 import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 
+export const kimiCheckMetadataSchema = z.object({ kimiSetup: z.literal(1), kimiCheck: z.uuid().optional() }).strict();
+
 export const kimiAgentSchema = z.object({
   id: z.literal('claude-kimi'), displayName: z.literal('Kimi (CC)'), command: z.string().min(1), args: z.array(z.string()).length(1),
-  modelCli: z.object({ listArgs: z.array(z.string()).length(2), primaryModels: z.tuple([z.literal('k3.1-pro[1m]')]) }).strict(),
+  modelCli: z.object({ listArgs: z.array(z.string()).length(2), primaryModels: z.array(z.enum(['k3.1-pro', 'k3.1-pro[1m]'])).length(1) }).strict().optional(),
   nativeSkillRoots: z.object({ user: z.array(z.string()), project: z.array(z.object({ path: z.string(), recursive: z.literal(true), ancestors: z.literal(true) }).strict()) }).strict(),
 }).strict();
 export type KimiAgent = z.infer<typeof kimiAgentSchema>;
@@ -24,6 +26,13 @@ export const kimiViewSchema = z.object({
   message: z.string(), hostId: z.string(), testThreadId: z.string().nullable(),
   verifyModel: z.string().nullable().default(null), manualRegistration: z.string().nullable(),
   keyChangedAt: z.number().nullable().default(null),
+  phase: z.enum(['components', 'access', 'check']).nullable().default(null),
+  startedAt: z.number().nullable().default(null),
+  checkToken: z.string().nullable().default(null),
+  checkStartedAt: z.number().nullable().default(null),
+  catalogVersion: z.number().int().nonnegative().default(0),
+  automatic: z.boolean().default(false),
+  ownedTestThreadId: z.string().nullable().default(null),
 }).strict();
 export type KimiView = z.infer<typeof kimiViewSchema>;
 export const kimiRpcContract = defineRpcContract({

@@ -16,3 +16,12 @@
 @media (max-width: 480px) { .svb-kimi { padding: 18px; width: calc(100% - 24px); } }
 .svb-kimi-cabinet { flex: 1; min-height: 0; overflow-y: auto; }
 .svb-kimi-cabinet > .svaib-account-viewport { height: auto; overflow: visible; }
+
+.svb-kimi-progress ol { list-style: none; padding: 0; display: grid; gap: 12px; font-size: 14px; }
+.svb-kimi-progress li { display: flex; align-items: center; gap: 10px; opacity: .55; }
+.svb-kimi-progress li[aria-current], .svb-kimi-progress li.done { opacity: 1; }
+.svb-kimi-progress li[aria-current] { font-weight: 600; }
+.svb-kimi-progress li > span { width: 22px; height: 22px; display: grid; place-items: center; flex-shrink: 0; }
+.svb-kimi-progress .svb-kimi-spinner { box-sizing: border-box; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; font-size: 0; animation: svb-kimi-spin 1s linear infinite; }
+@keyframes svb-kimi-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .svb-kimi-progress .svb-kimi-spinner { animation: none; } }

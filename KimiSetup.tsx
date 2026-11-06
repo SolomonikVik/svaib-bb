@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRpc, useRealtime, useSdk, useBbNavigate, UrlLink, experimental_NewThreadComposer as NewThreadComposer } from '@get-bb/plugin-sdk/app';
+import { useRpc, useRealtime, useRealtimeConnectionState, useSdk, useBbNavigate, UrlLink, experimental_NewThreadComposer as NewThreadComposer } from '@get-bb/plugin-sdk/app';
 import type { kimiRpcContract, KimiView } from './kimi-contract';
 import './kimi-setup.css';
 
@@ -39,24 +39,40 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
   const [binding, setBinding] = useState<PendingBinding | null>(null);
   const submitting = useRef(false);
   const [error, setError] = useState('');
+  const [connectionError, setConnectionError] = useState('');
+  const [finishedHere, setFinishedHere] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const activeHere = useRef(false);
+  const refreshing = useRef(false);
+  const connection = useRealtimeConnectionState();
   const revision = useRef(-1);
   const accept = useCallback((next: KimiView) => {
     if (next.revision < revision.current) return;
     revision.current = next.revision;
+    if (next.phase) activeHere.current = true;
+    if (next.stage === 'complete' && activeHere.current) setFinishedHere(true);
     setBinding(restoreBinding(next));
     setView(next);
   }, []);
   const refresh = useCallback(async () => {
-    try { accept(await rpc.call('kimiStatus', null)); }
-    catch { /* A disconnected plugin must not block the cabinet. */ }
+    if (refreshing.current) return;
+    refreshing.current = true;
+    try { accept(await rpc.call('kimiStatus', null)); setConnectionError(''); }
+    catch { setConnectionError('Связь с BB потеряна. Восстанавливаю статус настройки…'); }
+    finally { refreshing.current = false; }
   }, [rpc, accept]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh, connection]);
+  useEffect(() => {
+    const focus = () => { void refresh(); };
+    window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
+    return () => { window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); };
+  }, [refresh]);
   useRealtime('kimi-setup-changed', refresh);
   useEffect(() => {
-    if (view?.stage !== 'installing') return;
-    const timer = setInterval(() => { void refresh(); }, 1500);
+    if (!view?.phase && view?.stage !== 'installing') return;
+    const timer = setInterval(() => { setNow(Date.now()); void refresh(); }, 1500);
     return () => clearInterval(timer);
-  }, [view?.stage, refresh]);
+  }, [view?.stage, view?.phase, refresh]);
   async function act(action: () => Promise<KimiView>) {
     setBusy(true); setError('');
     try { accept(await action()); return true; }
@@ -80,14 +96,17 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     setOpened(true); void act(() => rpc.call('kimiOpen', null));
   }}>Настроить или проверить Kimi</button></div>;
   if (!view) return settings ? <div className="svb-kimi-settings" role="status"><p>{error || 'Проверяю настройку Kimi…'}</p><button onClick={() => { void act(() => rpc.call('kimiOpen', null)); }}>Повторить</button></div> : null;
-  if (!settings && view.hidden) return null;
-  const pending = busy || view.stage === 'installing';
+  if (!settings && view.hidden && !finishedHere) return null;
+  const pending = busy || !!view.phase || view.stage === 'installing';
+  const elapsed = Math.max(0, Math.floor((now - (view.startedAt ?? now)) / 1000));
+  const phaseLabels = ['Устанавливаю компоненты', 'Настраиваю доступ', 'Проверяю ответ Kimi', 'Готово к работе'];
+  const phaseIndex = view.stage === 'complete' ? 3 : ['components', 'access', 'check'].indexOf(view.phase ?? '');
   const dismiss = (reason: 'declined' | 'other-agent') => {
     setKey(''); void act(() => rpc.call('kimiDismiss', { reason })).then(ok => { if (ok && settings) setOpened(false); });
   };
   const open = () => { void act(() => rpc.call('kimiOpen', null)); };
   return <section className="svb svb-kimi" aria-label="Настройка Kimi" aria-busy={pending}>
-    <div className="svb-kimi-heading"><div><span className="svb-kicker">Доступ к модели</span><h2>{view.stage === 'complete' ? 'Kimi отвечает' : 'Kimi через Claude Code'}</h2></div>
+    <div className="svb-kimi-heading"><div><span className="svb-kicker">Доступ к модели</span><h2>{view.stage === 'complete' ? (view.automatic ? 'Готово к работе' : 'Kimi отвечает') : 'Kimi через Claude Code'}</h2></div>
       {settings && <button className="svb-text-button" disabled={pending} onClick={() => {
         setKey(''); void act(() => rpc.call('kimiDismiss', { reason: 'declined' })).then(ok => { if (ok) setOpened(false); });
       }}>Закрыть</button>}
@@ -104,21 +123,29 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     {view.stage === 'key' && <form onSubmit={event => {
       event.preventDefault(); const apiKey = key.trim(); setKey(''); void act(() => rpc.call('kimiStart', { apiKey }));
     }}>
-      <p>Нужна подписка Kimi Code и ключ из её консоли. Плагин подготовит отдельный профиль и добавит Kimi в BB.</p>
+      <p>Открой консоль Kimi Code, нажми «Создать API-ключ» и вставь его сюда. Нужна подписка Kimi Code. Дальше плагин всё настроит и проверит сам.</p>
       <UrlLink href="https://www.kimi.com/code/console" className="svb-kimi-link">Открыть консоль Kimi Code</UrlLink>
       <label>Ключ Kimi Code<input type="password" autoComplete="off" spellCheck={false} value={key} onChange={event => setKey(event.target.value)} placeholder="sk-kimi-…" required pattern="sk-kimi-[A-Za-z0-9_-]+" disabled={pending} /></label>
       <p className="svb-kimi-note">Ключ сохраняется в закрытом файле профиля на этом компьютере. В разговор и настройки провайдера он не попадёт.</p>
-      <button className="svb-primary-button" disabled={pending || !key.trim()}>Подготовить подключение</button>
+      <button className="svb-primary-button" disabled={pending || !key.trim()}>Продолжить</button>
     </form>}
-    {view.stage === 'installing' && <p role="status">Готовлю профиль и устанавливаю компоненты. Можно уйти с этой страницы и вернуться — текущий шаг сохранится.</p>}
+    {(view.phase || view.stage === 'complete' && view.automatic) && <div className="svb-kimi-progress" role="status" aria-live="polite">
+      <ol>{phaseLabels.map((label, index) => <li key={label} aria-current={index === phaseIndex ? 'step' : undefined} className={index < phaseIndex ? 'done' : ''}>
+        <span aria-hidden="true" className={index === phaseIndex && view.phase ? 'svb-kimi-spinner' : ''}>{index < phaseIndex ? '✓' : index + 1}</span>{label}
+      </li>)}</ol>
+      {view.phase && <p>Подожди здесь — статус обновится автоматически. Прошло {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}.</p>}
+      {(connectionError || connection !== 'connected') && <p className="svb-kimi-note">{connectionError || 'Восстанавливаю связь с BB… Статус обновится после подключения.'}</p>}
+    </div>}
+    {view.stage === 'installing' && !view.phase && <p role="status">Готовлю профиль и устанавливаю компоненты…</p>}
     {view.stage === 'registration' && <>
       {view.manualRegistration ? <>
         <p>Открой Settings → Plugins → ACP providers → Custom agents. Если список пуст, вставь массив ниже. Если записи уже есть, добавь объект Kimi в существующий массив, сохранив остальные записи.</p>
         <details><summary>Данные для добавления провайдера</summary><textarea aria-label="Регистрация Kimi без ключа" readOnly value={view.manualRegistration} rows={8} /></details>
         <button className="svb-primary-button" disabled={pending} onClick={open}>Провайдер добавлен — проверить</button>
-      </> : <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiStart', {})); }}>Продолжить настройку</button>}
+      </> : <><button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiStart', {})); }}>Продолжить настройку</button><details><summary>Если компоненты не удаётся скачать</summary><p>Проверь интернет. Если автоматическая подготовка Node.js не работает на этом компьютере, установи Node.js 22+ с npm и повтори настройку.</p><UrlLink href="https://nodejs.org/en/download" className="svb-kimi-link">Скачать Node.js</UrlLink></details></>}
     </>}
     {view.stage === 'verify' && <>
+      {view.automatic ? <>{!view.phase && <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiRecheck', null)); }}>Повторить проверку</button>}</> : <>
       <p>Отправь короткий запрос через Kimi. Проверка запустится на компьютере, где настроен Kimi.</p>
       {view.testThreadId ? <div className="svb-kimi-actions">
           <button className="svb-text-button" onClick={() => openThread(view.testThreadId!)}>Открыть проверочный разговор</button>
@@ -161,6 +188,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
           <p className="svb-kimi-note">Не удалось получить модели Kimi. Проверь, что компьютер BB подключён.</p>
           <button className="svb-primary-button" disabled={pending} onClick={open}>Повторить проверку</button>
         </div>}
+      </>}
       {view.canReplaceKey && !editingKey && <button className="svb-text-button" disabled={pending} onClick={() => setEditingKey(true)}>Исправить ключ</button>}
       {view.canReplaceKey && editingKey && <form onSubmit={event => {
         event.preventDefault(); const apiKey = key.trim(); setKey('');

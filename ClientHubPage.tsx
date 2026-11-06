@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
-import { Markdown, useRpc } from '@get-bb/plugin-sdk/app';
+import { Markdown, UrlLink, useRpc } from '@get-bb/plugin-sdk/app';
 import type { rpcContract } from './server';
 import type { Action, SourceDocument, Workspace } from './types';
 import { presentationMarkdown, registeredSourceForHref } from './document-presentation';
@@ -102,8 +102,9 @@ export default function ClientHubPage({ workspace, onSource, onAction, guideOpen
     {hub.cards.length > 0 && <section className="svb-client-scenarios" aria-label="Работа с клиентом">{hub.cards.map(card => {
       const action = card.actionId ? workspace.actions.find(item => item.id === card.actionId) : undefined;
       const source = card.sourceId ? workspace.sources.find(item => item.id === card.sourceId) : undefined;
-      const content = <><ScenarioIcon kind={card.icon} />{(action || source) && <Arrow />}<h2>{card.title}</h2><p>{card.description}</p></>;
+      const content = <><ScenarioIcon kind={card.icon} />{(action || source || card.url) && <Arrow />}<h2>{card.title}</h2><p>{card.description}</p></>;
       const className = `svb-client-scenario svb-client-scenario--${card.icon}`;
+      if (card.url) return <UrlLink key={card.id} className={className} href={card.url}>{content}</UrlLink>;
       return action || source ? <button key={card.id} className={className} type="button" disabled={action?.available === false} title={action?.available === false ? action.unavailableReason : undefined} onClick={() => action ? onAction(action) : source && onSource(source.id)}>{content}</button>
         : <article key={card.id} className={className}>{content}</article>;
     })}</section>}
