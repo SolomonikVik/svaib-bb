@@ -126,8 +126,8 @@ def _identity(files: dict[str, bytes], version: str) -> None:
 
 
 def _entry(manifest: dict, provider: str) -> dict:
-    # TODO(remove-schema-1): remove this legacy reader after two BB releases
-    # shipping schema 2; it exists only for the transition from methods 0.9.2.
+    # Keep readers for the three supported BB minor lines, including their
+    # persisted marketplaces. Schema 1 is still used by BB 0.3.x.
     if manifest.get("schema") == 1 and isinstance(manifest.get("providers"), dict):
         entry = manifest["providers"].get(provider)
         root, host = "methods/" + provider, provider
@@ -195,9 +195,10 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
                     or old_owner.get("provider") != provider):
                 raise PreparationError("Existing marketplace is not owned by this installer")
             old_version = _version(old_owner.get("version"))
-            if old_version > new_version:
-                raise PreparationError("Refusing an implicit method downgrade")
             _snapshot(target, old_owner.get("files"))
+            if old_version > new_version:
+                return {"marketplaceRoot": str(target), "version": old_owner["version"],
+                        "provider": provider, "changed": False}
             if old_version == new_version and old_owner.get("files") != entry["files"]:
                 raise PreparationError("Method content changed without a version increment")
             if old_owner == owner:
