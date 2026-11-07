@@ -2,6 +2,10 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104. A Codex or Claude Code model connection and a svaib account are configured separately.
 
+## Version 0.5.4
+
+The bundled Harness is 0.11.0. It fills a missing company from the current workspace while preserving an explicit choice, and no longer keeps company selection in conversation history. The shared guide to Claude and ChatGPT access has been updated. BB and native Harness installations continue to update independently.
+
 ## Version 0.5.2
 
 Onboarding instructions are shorter and use the current Kimi setup card. The bundled Harness is 0.10.1. BB and Harness update independently: the current and two previous minor lines of each are supported. A version difference does not interrupt work or require reinstalling or signing in again. Existing official native installations and newer prepared method packages are preserved; missing features are handled for the specific action.
@@ -33,7 +37,7 @@ Install `https://github.com/SolomonikVik/svaib-bb` in BB Settings → Installed 
 For an agent-managed install with an explicit compatible release range:
 
 ```sh
-bb plugin install git:https://github.com/SolomonikVik/svaib-bb.git@^0.5.2
+bb plugin install git:https://github.com/SolomonikVik/svaib-bb.git@^0.5.4
 ```
 
 The repository contains the BB plugin and one shared methodology package for Codex and Claude Code. Its hooks detect their native host. The connection assistant preserves the actual provider and profile, validates the bundled package and prepares that provider's stable local marketplace, then uses the CLI's normal plugin installation. Python 3 is required by the methodology handlers and managed sign-in. The managed Codex sign-in path currently requires Codex CLI 0.166.0. User credentials remain in the normal model and svaib sign-in flows.
