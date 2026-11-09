@@ -124,7 +124,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
       event.preventDefault(); const apiKey = key.trim(); setKey(''); void act(() => rpc.call('kimiStart', { apiKey }));
     }}>
       <p>Открой консоль Kimi Code, нажми «Создать API-ключ» и вставь его сюда. Нужна подписка Kimi Code. Дальше плагин всё настроит и проверит сам.</p>
-      <UrlLink href="https://www.kimi.com/code/console" className="svb-kimi-link">Открыть консоль Kimi Code</UrlLink>
+      <UrlLink href="https://www.kimi.ai/code/console" className="svb-kimi-link">Открыть консоль Kimi Code</UrlLink>
       <label>Ключ Kimi Code<input type="password" autoComplete="off" spellCheck={false} value={key} onChange={event => setKey(event.target.value)} placeholder="sk-kimi-…" required pattern="sk-kimi-[A-Za-z0-9_-]+" disabled={pending} /></label>
       <p className="svb-kimi-note">Ключ сохраняется в закрытом файле профиля на этом компьютере. В разговор и настройки провайдера он не попадёт.</p>
       <button className="svb-primary-button" disabled={pending || !key.trim()}>Продолжить</button>

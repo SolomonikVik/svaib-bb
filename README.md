@@ -2,6 +2,10 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104. A Codex or Claude Code model connection and a svaib account are configured separately.
 
+## Version 0.5.5
+
+The Kimi setup card now opens the international Kimi Code console at https://www.kimi.ai/code/console. The bundled Harness remains 0.11.0.
+
 ## Version 0.5.4
 
 The bundled Harness is 0.11.0. It fills a missing company from the current workspace while preserving an explicit choice, and no longer keeps company selection in conversation history. The shared guide to Claude and ChatGPT access has been updated. BB and native Harness installations continue to update independently.
@@ -16,7 +20,7 @@ Fixes installation from Git: the SDK process module used by the Kimi host is inc
 
 ## Version 0.5.0
 
-Kimi setup continues automatically after you enter an API key. Open the [Kimi Code console](https://www.kimi.com/code/console), choose “Create API key” and paste the key into the setup card. The plugin prepares the components, configures access, sends a short verification request and removes its own test conversation after a successful reply.
+Kimi setup continues automatically after you enter an API key. Open the [Kimi Code console](https://www.kimi.ai/code/console), choose “Create API key” and paste the key into the setup card. The plugin prepares the components, configures access, sends a short verification request and removes its own test conversation after a successful reply.
 
 The card shows the current stage and elapsed time, refreshes automatically and restores saved progress after navigation or restart. The configured computer is selected automatically. Failed checks have an explicit retry; key replacement rejects replies from the previous key.
 
@@ -37,7 +41,7 @@ Install `https://github.com/SolomonikVik/svaib-bb` in BB Settings → Installed 
 For an agent-managed install with an explicit compatible release range:
 
 ```sh
-bb plugin install git:https://github.com/SolomonikVik/svaib-bb.git@^0.5.4
+bb plugin install git:https://github.com/SolomonikVik/svaib-bb.git@^0.5.5
 ```
 
 The repository contains the BB plugin and one shared methodology package for Codex and Claude Code. Its hooks detect their native host. The connection assistant preserves the actual provider and profile, validates the bundled package and prepares that provider's stable local marketplace, then uses the CLI's normal plugin installation. Python 3 is required by the methodology handlers and managed sign-in. The managed Codex sign-in path currently requires Codex CLI 0.166.0. User credentials remain in the normal model and svaib sign-in flows.
