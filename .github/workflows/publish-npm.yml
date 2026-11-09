@@ -64,6 +64,11 @@ jobs:
         run: |
           mkdir -p ../artifacts
           npm pack --ignore-scripts --pack-destination ../artifacts
+      - name: Use the Node 22 runtime compatible with older Macs
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.23.4'
+          package-manager-cache: false
       - name: Verify tarball and install with Git disabled
         run: |
           mkdir -p no-git
@@ -72,8 +77,11 @@ jobs:
           export PATH="$PWD/no-git:$PATH"
           npm install --prefix consumer --ignore-scripts --omit=optional --no-audit --no-fund ./artifacts/*.tgz
           python3 tooling/scripts/npm_release.py verify --root consumer/node_modules/bb-plugin-svaib-workplace --tag "$RELEASE_TAG"
+          node --input-type=module -e 'const m = await import(process.argv[1]); if (typeof m.default !== "function") throw new Error("Missing BB plugin factory")' "file://$PWD/consumer/node_modules/bb-plugin-svaib-workplace/dist/server.js"
+          node --check consumer/node_modules/bb-plugin-svaib-workplace/dist/host.js
           python3 tooling/scripts/npm_release.py receipt --tarball "artifacts/bb-plugin-svaib-workplace-${RELEASE_TAG#v}.tgz" --output artifacts/receipt.json
           cp plugin/npm-release.json artifacts/source.json
+          cp tooling/scripts/npm_release.py artifacts/npm_release.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-package
@@ -85,7 +93,7 @@ jobs:
     if: github.event_name == 'push' || inputs.publish
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
@@ -117,4 +125,4 @@ jobs:
       - name: Confirm registry publication
         env:
           VERSION: ${{ needs.build.outputs.version }}
-        run: npm view "bb-plugin-svaib-workplace@$VERSION" version dist.integrity repository.url --registry=https://registry.npmjs.org
+        run: python3 artifacts/npm_release.py wait-registry --tag "v$VERSION" --tarball "artifacts/bb-plugin-svaib-workplace-$VERSION.tgz" --timeout 300

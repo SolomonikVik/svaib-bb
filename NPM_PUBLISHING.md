@@ -12,14 +12,28 @@ The tag must match `package.json`. It installs locked production dependencies
 with lifecycle scripts disabled, builds with pinned `bb-app@0.49.0`, packs the
 plugin, then installs the tarball with `git` disabled. Checks cover all three
 BB bundles and their metadata, the bundled local Screen dependency, and native
-Harness preparation for both Codex and Claude Code. Runtime behavior on every
-desktop platform is a separate acceptance step.
+Harness preparation for both Codex and Claude Code. Consumer checks use Node
+22.23.4 (also pinned by the Kimi runtime helper), import the server bundle and
+check host syntax. The installed package is rejected if it contains esbuild,
+native add-ons, platform executables, or root installation/build hooks.
+
+This avoids the Git installation's local esbuild step, including the reported
+`_SecTrustCopyCertificateChain` error on an Intel Mac with macOS 11.7.11. For npm
+sources BB uses the prebuilt app/server/host files; no local compiler is needed.
+Node 24 is used on the CI build runner only. The npm package does not raise the
+OS requirements of an already working BB installation. The BB application,
+model adapter and external tools have their own compatibility limits. A real
+macOS 11 device remains the acceptance check; a Linux/modern macOS run does not
+prove that complete user flow.
 
 The publish job receives only the verified tarball, checks its SHA256, and
 publishes that exact artifact. Build artifacts and source/hash receipts remain
 available in the Actions run for 30 days. A failed check prevents publication;
-an existing npm version is never overwritten. Fix a failed run and rerun it;
-if npm publication succeeded, do not rerun the publish job for that version.
+an existing npm version is never overwritten. Registry confirmation waits up to
+five minutes for npm's first-publication processing and compares the registry
+tarball hash to the verified artifact. Fix a failed run and rerun it; if npm
+accepted publication, do not rerun the publish job for that version merely
+because registry processing exceeded this wait.
 
 For an existing tag (including the first npm release `v0.5.5`), use **Actions →
 Publish npm package → Run workflow** on `main`. Enter the tag. Leave `publish`

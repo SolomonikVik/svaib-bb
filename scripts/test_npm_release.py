@@ -1,11 +1,13 @@
 """Release-boundary checks; the workflow also installs and checks the real tarball."""
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("npm_release", Path(__file__).with_name("npm_release.py"))
 release = importlib.util.module_from_spec(spec)
@@ -72,6 +74,42 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(receipt["sha256"], release.hashlib.sha256(tarball.read_bytes()).hexdigest())
         tarball.write_bytes(b"replaced artifact")
         self.assertNotEqual(receipt["sha256"], release.hashlib.sha256(tarball.read_bytes()).hexdigest())
+
+    def test_native_binaries_and_esbuild_are_refused(self):
+        release.prepare(self.root, "v0.5.5")
+        for name, content in (("addon.node", b"native"), ("helper", b"\xcf\xfa\xed\xfe"),
+                              ("helper", b"\x7fELF"), ("esbuild/index.js", b"export {}")):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            with self.subTest(name=name, content=content), self.assertRaises(ValueError):
+                release.verify_portable(self.root)
+            target.unlink()
+
+    def test_javascript_only_package_is_accepted_without_install_hooks(self):
+        release.prepare(self.root, "v0.5.5")
+        (self.root / "server.js").write_text("export default () => {}")
+        release.verify_portable(self.root)
+        package = release.read_json(self.root / "package.json")
+        package["scripts"] = {"postinstall": "esbuild"}
+        release.write_json(self.root / "package.json", package)
+        with self.assertRaises(ValueError):
+            release.verify_portable(self.root)
+
+    def test_registry_processing_is_retried_and_exact_tarball_is_checked(self):
+        tarball = self.root / "fixture.tgz"
+        tarball.write_bytes(b"verified package")
+        package = {"name": release.NAME, "version": "0.5.5", "dist": {
+            "shasum": release.hashlib.sha1(tarball.read_bytes()).hexdigest(), "integrity": "fixture"}}
+        pending = release.urllib.error.HTTPError("https://registry.npmjs.org", 404, "processing", {}, None)
+        with patch.object(release.urllib.request, "urlopen", side_effect=[
+                pending, io.BytesIO(json.dumps(package).encode())]), patch.object(release.time, "sleep") as sleep:
+            release.wait_registry("v0.5.5", tarball, 30)
+            sleep.assert_called_once()
+        package["dist"]["shasum"] = "wrong artifact"
+        with patch.object(release.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(package).encode())):
+            with self.assertRaises(ValueError):
+                release.wait_registry("v0.5.5", tarball, 30)
 
 
 if __name__ == "__main__":

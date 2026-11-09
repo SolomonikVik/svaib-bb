@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
+import urllib.error
+import urllib.request
 
 NAME = "bb-plugin-svaib-workplace"
 REPOSITORY = "https://github.com/SolomonikVik/svaib-bb"
@@ -68,6 +71,29 @@ def prepare(root, tag):
     })
 
 
+def verify_portable(root):
+    """The consumer must not need a compiler or OS-specific native add-on."""
+    binary_headers = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
+                      b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+                      b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if any(part in ("esbuild", "@esbuild") for part in relative.parts):
+            raise ValueError("Build tool must not ship to the consumer: " + str(relative))
+        if not path.is_file():
+            continue
+        if (path.suffix.lower() in (".node", ".dylib", ".dll", ".exe")
+                or re.search(r"\.so(?:\.[0-9]+)*$", path.name)):
+            raise ValueError("Native binary must not ship to the consumer: " + str(relative))
+        with path.open("rb") as file:
+            header = file.read(4)
+        if header in binary_headers or header[:2] == b"MZ":
+            raise ValueError("Platform executable must not ship to the consumer: " + str(relative))
+    package = read_json(root / "package.json")
+    if any(hook in package.get("scripts", {}) for hook in ("preinstall", "install", "postinstall", "prepare")):
+        raise ValueError("The published plugin must not have installation/build hooks")
+
+
 def verify(root, tag):
     package = read_json(root / "package.json")
     validate_identity(package, tag)
@@ -91,6 +117,7 @@ def verify(root, tag):
         raise ValueError("Missing frontend stylesheet")
     if not (root / "node_modules" / LOCAL_DEPENDENCY / "package.json").is_file():
         raise ValueError("Missing bundled Screen component")
+    verify_portable(root)
     spec = importlib.util.spec_from_file_location("prepare_methods", root / "scripts/prepare_methods.py")
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
@@ -109,15 +136,44 @@ def receipt(tarball, output):
                         "sha256": hashlib.sha256(raw).hexdigest()})
 
 
+def wait_registry(tag, tarball, timeout):
+    validate_identity({"name": NAME, "version": tag.removeprefix("v")}, tag)
+    expected = hashlib.sha1(tarball.read_bytes()).hexdigest()
+    deadline = time.monotonic() + timeout
+    url = f"https://registry.npmjs.org/{NAME}/{tag[1:]}"
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=15) as response:
+                package = json.load(response)
+            if package["dist"]["shasum"] != expected:
+                raise ValueError("Registry tarball differs from the verified build artifact")
+            print(json.dumps({"name": package["name"], "version": package["version"],
+                              "integrity": package["dist"]["integrity"]}))
+            return
+        except urllib.error.HTTPError as error:
+            if error.code not in (404, 429, 500, 502, 503, 504):
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            pass
+        if time.monotonic() >= deadline:
+            raise TimeoutError("npm accepted publication but the package is not publicly available yet; do not republish")
+        time.sleep(min(10, max(0, deadline - time.monotonic())))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "verify", "receipt"))
+    parser.add_argument("action", choices=("prepare", "verify", "receipt", "wait-registry"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--tag")
     parser.add_argument("--tarball", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
-    if args.action == "receipt":
+    if args.action == "wait-registry":
+        if not args.tag or not args.tarball:
+            parser.error("wait-registry requires --tag and --tarball")
+        wait_registry(args.tag, args.tarball, args.timeout)
+    elif args.action == "receipt":
         if not args.tarball or not args.output:
             parser.error("receipt requires --tarball and --output")
         receipt(args.tarball, args.output)
