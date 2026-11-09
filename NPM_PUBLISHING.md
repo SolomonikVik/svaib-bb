@@ -51,7 +51,9 @@ an npm distribution of an already released plugin.
    the `SolomonikVik/svaib-bb` Actions secret `NPM_BOOTSTRAP_TOKEN` through a
    secure form. Never commit the token or send it in chat.
 3. Run the workflow for `v0.5.5` with publishing enabled. The first successful
-   publication creates the package under that npm account.
+   upload creates the package under that npm account. If npm creates a
+   `0.0.0-stage` placeholder, the owner must approve `0.5.5` in npm's **Staged
+   Packages** tab with 2FA. An accepted upload is not yet a public release.
 4. In the package's npm **Settings → Trusted publishing**, select GitHub
    Actions: owner `SolomonikVik`, repository `svaib-bb`, workflow filename
    `publish-npm.yml`, no environment. Allow direct `npm publish`.

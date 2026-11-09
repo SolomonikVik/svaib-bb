@@ -96,6 +96,16 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.verify_portable(self.root)
 
+    def test_hoisted_native_dependency_is_also_refused(self):
+        plugin = self.root / "node_modules" / "plugin"
+        plugin.mkdir(parents=True)
+        release.write_json(plugin / "package.json", {})
+        sibling = plugin.parent / "native-dependency"
+        sibling.mkdir()
+        (sibling / "addon.node").write_bytes(b"native add-on")
+        with self.assertRaises(ValueError):
+            release.verify_portable(plugin)
+
     def test_registry_processing_is_retried_and_exact_tarball_is_checked(self):
         tarball = self.root / "fixture.tgz"
         tarball.write_bytes(b"verified package")

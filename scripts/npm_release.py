@@ -76,8 +76,11 @@ def verify_portable(root):
     binary_headers = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",
                       b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
                       b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
+    # npm may hoist registry dependencies beside the plugin. Check the entire
+    # installed dependency tree, not only files nested inside the package.
+    scan_root = root.parent if root.parent.name == "node_modules" else root
+    for path in scan_root.rglob("*"):
+        relative = path.relative_to(scan_root)
         if any(part in ("esbuild", "@esbuild") for part in relative.parts):
             raise ValueError("Build tool must not ship to the consumer: " + str(relative))
         if not path.is_file():
