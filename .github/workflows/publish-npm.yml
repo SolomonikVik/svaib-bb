@@ -13,6 +13,10 @@ on:
         description: Publish the verified package (false builds and verifies only)
         default: false
         type: boolean
+      check_oidc:
+        description: Check Trusted Publishing credentials without building or publishing
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +27,7 @@ concurrency:
 
 jobs:
   build:
+    if: ${{ !inputs.check_oidc }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -110,10 +115,6 @@ jobs:
           name: npm-package
           path: artifacts
       - name: Publish the exact verified tarball
-        env:
-          # One-time bootstrap only. Remove this secret after connecting the
-          # npm package to this workflow's trusted publisher; OIDC then takes over.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           python3 - <<'PY'
           import hashlib, json, pathlib
@@ -126,3 +127,19 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
         run: python3 artifacts/npm_release.py wait-registry --tag "v$VERSION" --tarball "artifacts/bb-plugin-svaib-workplace-$VERSION.tgz" --timeout 900
+
+  check-oidc:
+    if: inputs.check_oidc
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test release tooling
+        run: python3 scripts/test_npm_release.py
+      - name: Verify npm accepts this workflow's OIDC identity
+        run: python3 scripts/npm_release.py check-oidc

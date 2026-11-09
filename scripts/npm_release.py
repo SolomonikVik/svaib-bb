@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -11,6 +12,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 NAME = "bb-plugin-svaib-workplace"
 REPOSITORY = "https://github.com/SolomonikVik/svaib-bb"
@@ -163,16 +165,49 @@ def wait_registry(tag, tarball, timeout):
         time.sleep(min(10, max(0, deadline - time.monotonic())))
 
 
+def check_oidc():
+    """Validate the workflow's trusted publisher without publishing a version."""
+    url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
+    request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url or not request_token:
+        raise SystemExit("OIDC check must run in GitHub Actions with id-token: write")
+    separator = "&" if "?" in url else "?"
+    url += separator + urllib.parse.urlencode({"audience": "npm:registry.npmjs.org"})
+    try:
+        request = urllib.request.Request(url, headers={"Authorization": "Bearer " + request_token})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            identity = json.load(response)["value"]
+        request = urllib.request.Request(
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/" + NAME,
+            data=b"", method="POST", headers={"Authorization": "Bearer " + identity},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            credential = json.load(response)
+        if credential.get("token_type") != "oidc" or not credential.get("token"):
+            raise SystemExit("npm returned an unexpected OIDC exchange response")
+    except urllib.error.HTTPError as error:
+        raise SystemExit("Trusted publisher check failed: HTTP " + str(error.code))
+    except (urllib.error.URLError, TimeoutError):
+        raise SystemExit("Trusted publisher check failed: connection error")
+    # Never log, persist, or pass credential values to another process.
+    print(json.dumps({"package": NAME, "oidcExchange": "accepted",
+                      "credentialExpires": credential.get("expires"),
+                      "workflow": os.environ.get("GITHUB_WORKFLOW_REF"),
+                      "published": False}))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "verify", "receipt", "wait-registry"))
+    parser.add_argument("action", choices=("prepare", "verify", "receipt", "wait-registry", "check-oidc"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--tag")
     parser.add_argument("--tarball", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
-    if args.action == "wait-registry":
+    if args.action == "check-oidc":
+        check_oidc()
+    elif args.action == "wait-registry":
         if not args.tag or not args.tarball:
             parser.error("wait-registry requires --tag and --tarball")
         wait_registry(args.tag, args.tarball, args.timeout)

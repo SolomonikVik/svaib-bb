@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+from contextlib import redirect_stdout
 import json
 from pathlib import Path
 import subprocess
@@ -120,6 +121,37 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(release.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(package).encode())):
             with self.assertRaises(ValueError):
                 release.wait_registry("v0.5.5", tarball, 30)
+
+    def test_oidc_probe_never_logs_credentials_or_publishes(self):
+        environment = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/oidc?api-version=2",
+                       "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-secret-fixture",
+                       "GITHUB_WORKFLOW_REF": "SolomonikVik/svaib-bb/.github/workflows/publish-npm.yml@refs/heads/main"}
+        output = io.StringIO()
+        replies = [io.BytesIO(b'{"value":"identity-secret-fixture"}'),
+                   io.BytesIO(b'{"token_type":"oidc","token":"npm-secret-fixture","expires":"fixture"}')]
+        with patch.dict(release.os.environ, environment, clear=True), \
+                patch.object(release.urllib.request, "urlopen", side_effect=replies) as request, \
+                redirect_stdout(output):
+            release.check_oidc()
+        result = json.loads(output.getvalue())
+        self.assertFalse(result["published"])
+        self.assertEqual(result["oidcExchange"], "accepted")
+        self.assertNotIn("secret-fixture", output.getvalue())
+        first, second = [call.args[0] for call in request.call_args_list]
+        self.assertIn("audience=npm%3Aregistry.npmjs.org", first.full_url)
+        self.assertEqual(second.method, "POST")
+        self.assertTrue(second.full_url.endswith("/oidc/token/exchange/package/" + release.NAME))
+
+    def test_oidc_failure_reports_status_without_response_or_credentials(self):
+        environment = {"ACTIONS_ID_TOKEN_REQUEST_URL": "https://example.invalid/oidc",
+                       "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-secret-fixture"}
+        error = release.urllib.error.HTTPError("https://example.invalid", 401, "secret-fixture", {}, None)
+        with patch.dict(release.os.environ, environment, clear=True), \
+                patch.object(release.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(SystemExit) as caught:
+                release.check_oidc()
+        self.assertIn("HTTP 401", str(caught.exception))
+        self.assertNotIn("secret-fixture", str(caught.exception))
 
 
 if __name__ == "__main__":

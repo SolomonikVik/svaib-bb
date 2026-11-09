@@ -46,12 +46,11 @@ an npm distribution of an already released plugin.
 
 1. Create and verify an npmjs.com account and enable 2FA. Registration, password,
    and accepting npm's terms belong to the account owner.
-2. For the first publication, create a short-lived granular npm token with
-   permission to create/publish this package and bypass 2FA for CI. Add it to
-   the `SolomonikVik/svaib-bb` Actions secret `NPM_BOOTSTRAP_TOKEN` through a
-   secure form. Never commit the token or send it in chat.
-3. Run the workflow for `v0.5.5` with publishing enabled. The first successful
-   upload creates the package under that npm account. npm may show a temporary
+2. The first publication, `0.5.5`, used a one-time bootstrap token. It created
+   the package under the npm account `svaib`. That secret has been removed from
+   GitHub, and the workflow no longer has a token fallback. Revoke the original
+   `bb-plugin-bootstrap` token in npm's account settings as well.
+3. npm may show a temporary
    `0.0.0-stage` placeholder while processing a direct publication; that alone
    does not mean owner approval is required. Ask for approval only if the actual
    staged-publish response or authenticated staged-package list confirms it.
@@ -59,9 +58,14 @@ an npm distribution of an already released plugin.
 4. In the package's npm **Settings → Trusted publishing**, select GitHub
    Actions: owner `SolomonikVik`, repository `svaib-bb`, workflow filename
    `publish-npm.yml`, no environment. Allow direct `npm publish`.
-5. Remove the GitHub bootstrap secret and revoke its token in npm. Later tag
-   releases authenticate with GitHub OIDC. Complete the first OIDC publication
-   within npm's configuration expiry window (currently two days).
+5. Run **Publish npm package** on `main` with `check_oidc` on (and `publish`
+   off). This checks GitHub-to-npm OIDC token exchange for this exact workflow
+   without building or publishing. Credential values are kept only in process
+   memory and never logged or persisted. This verifies authentication; it is
+   not a completed package publication. Later tag releases use OIDC. Complete
+   the first actual OIDC publication within npm's configuration expiry window
+   (currently two days); a credential-only probe must not be assumed to meet
+   that requirement.
 
 GitHub Actions builds the package for every release. No local agent build is
 part of the publishing procedure. GitHub Packages is not the download registry:
