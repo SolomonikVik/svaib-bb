@@ -93,7 +93,7 @@ jobs:
     if: github.event_name == 'push' || inputs.publish
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -125,4 +125,4 @@ jobs:
       - name: Confirm registry publication
         env:
           VERSION: ${{ needs.build.outputs.version }}
-        run: python3 artifacts/npm_release.py wait-registry --tag "v$VERSION" --tarball "artifacts/bb-plugin-svaib-workplace-$VERSION.tgz" --timeout 300
+        run: python3 artifacts/npm_release.py wait-registry --tag "v$VERSION" --tarball "artifacts/bb-plugin-svaib-workplace-$VERSION.tgz" --timeout 900

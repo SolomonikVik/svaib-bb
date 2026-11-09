@@ -30,7 +30,7 @@ The publish job receives only the verified tarball, checks its SHA256, and
 publishes that exact artifact. Build artifacts and source/hash receipts remain
 available in the Actions run for 30 days. A failed check prevents publication;
 an existing npm version is never overwritten. Registry confirmation waits up to
-five minutes for npm's first-publication processing and compares the registry
+fifteen minutes for npm's first-publication processing and compares the registry
 tarball hash to the verified artifact. Fix a failed run and rerun it; if npm
 accepted publication, do not rerun the publish job for that version merely
 because registry processing exceeded this wait.
@@ -51,9 +51,11 @@ an npm distribution of an already released plugin.
    the `SolomonikVik/svaib-bb` Actions secret `NPM_BOOTSTRAP_TOKEN` through a
    secure form. Never commit the token or send it in chat.
 3. Run the workflow for `v0.5.5` with publishing enabled. The first successful
-   upload creates the package under that npm account. If npm creates a
-   `0.0.0-stage` placeholder, the owner must approve `0.5.5` in npm's **Staged
-   Packages** tab with 2FA. An accepted upload is not yet a public release.
+   upload creates the package under that npm account. npm may show a temporary
+   `0.0.0-stage` placeholder while processing a direct publication; that alone
+   does not mean owner approval is required. Ask for approval only if the actual
+   staged-publish response or authenticated staged-package list confirms it.
+   An accepted upload is not yet a publicly downloadable release.
 4. In the package's npm **Settings → Trusted publishing**, select GitHub
    Actions: owner `SolomonikVik`, repository `svaib-bb`, workflow filename
    `publish-npm.yml`, no environment. Allow direct `npm publish`.

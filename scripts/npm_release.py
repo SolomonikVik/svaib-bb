@@ -170,7 +170,7 @@ def main():
     parser.add_argument("--tag")
     parser.add_argument("--tarball", type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
     if args.action == "wait-registry":
         if not args.tag or not args.tarball:

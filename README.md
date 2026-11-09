@@ -36,6 +36,13 @@ This is an early access release. The local test build was manually checked in th
 
 ## Installation
 
+For installation without Git or local build tools, paste
+`npm:bb-plugin-svaib-workplace` into BB's **Install from source** dialog. The
+npm package includes prebuilt backend, frontend and host bundles; BB does not
+run esbuild on the user's computer for this source. This avoids the reported
+Git-install failure on macOS 11.7.11 involving `_SecTrustCopyCertificateChain`.
+The complete flow on that device still needs acceptance on the actual Mac.
+
 Install `https://github.com/SolomonikVik/svaib-bb` in BB Settings → Installed plugins → Install from source. The package is at the repository root. BB uses its bundled npm and toolchain; users do not install npm or unpack an archive. The ordinary Git URL tracks the default branch; immutable semantic-version tags are available for explicit range tracking.
 
 For an agent-managed install with an explicit compatible release range:
