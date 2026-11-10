@@ -91,12 +91,16 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     if (!hostId) return null;
     const started = Date.now(); log('bb-discovery', 'start');
     try {
-      const catalog = await bounded(bb.sdk.providers.models({ hostId, providerId: PROVIDER, preferCached: false }));
+      const status = await client.call('kimiInspect', null, target());
+      const owned = status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
+      // Keep the modern freshness request. A variable also typechecks against
+      // the older SDK, which ignores the additional property at runtime.
+      const query = { hostId, providerId: PROVIDER, preferCached: false };
+      const catalog = await bounded(bb.sdk.providers.models(query));
       if (catalog.modelLoadError || !catalog.providers.some(provider => provider.id === PROVIDER && provider.available)) {
         log('bb-discovery', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - started }); return null;
       }
-      const status = await client.call('kimiInspect', null, target());
-      const allowed = status.verifyModels && status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)
+      const allowed = status.verifyModels && owned
         ? new Set(status.verifyModels) : null;
       const models = catalog.models.filter(model => (!model.routeProviderId || model.routeProviderId === PROVIDER) && (!allowed || allowed.has(model.id)));
       const selected = (models.find(model => model.id === PREFERRED_MODEL) ?? models.find(model => model.id === 'k3.1-pro[1m]') ?? models.find(model => model.isDefault) ?? models[0])?.id ?? null;
@@ -122,25 +126,45 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     canReplaceKey: false, verifyModel: null, phase: null,
     });
   }
+  let pendingRegistrationGeneration: string | null = null;
+  function manualGenerationFor(agent: KimiAgent): string | undefined {
+    try {
+      const manual = JSON.parse(view.manualRegistration ?? 'null')?.[0];
+      const generation = manual?.env?.SVAIB_KIMI_CATALOG_GENERATION;
+      if (sameRegistration(manual, agent) && typeof generation === 'string' && /^[a-f0-9-]{36}$/.test(generation)) return generation;
+    } catch { /* Only a matching manual registration can complete the fallback. */ }
+    return undefined;
+  }
   async function writeRegistration(agent: KimiAgent) {
     const list = await agents();
     if (disposed) return false;
     const existing = list.find(item => item.id === agent.id);
     const knownCli = existing && [ 'k3.1-pro[1m]', 'k3.1-pro' ].some(model =>
       JSON.stringify(existing.modelCli) === JSON.stringify({ listArgs: [agent.args[0], '--list-models'], primaryModels: [model] }));
-    if (!existing || sameRegistration(existing, agent) && knownCli) {
-      const updated = list.map(item => {
-        if (item !== existing) return item;
-        const { modelCli: _generatedCli, ...preserved } = item;
-        return preserved;
-      });
-      await bb.sdk.plugins.updateSettings({ pluginId: SETTINGS_PLUGIN, values: { customAgents: JSON.stringify(existing ? updated : [...list, agent]) } });
-    }
+    if (existing && !sameRegistration(existing, agent)) return false;
+    // Both BB's server cache and ACP's minute-long discovery cache key on the
+    // registered launch environment. An inert generation invalidates both after
+    // a profile mutation, on BB 0.48.1 as well as current BB. Preserve all user
+    // fields/environment variables and never change the command or model choice.
+    const manualGeneration = manualGenerationFor(agent);
+    const generation = manualGeneration ?? randomUUID();
+    pendingRegistrationGeneration = generation;
+    if (manualGeneration && !knownCli && (existing?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation) return true;
+    const { modelCli, ...preserved } = existing ?? agent;
+    const updated = {
+      ...preserved, ...(!knownCli && modelCli ? { modelCli } : {}),
+      env: { ...((existing?.env ?? {}) as Record<string, string>), SVAIB_KIMI_CATALOG_GENERATION: generation },
+    };
+    await bb.sdk.plugins.updateSettings({ pluginId: SETTINGS_PLUGIN,
+      values: { customAgents: JSON.stringify(existing ? list.map(item => item === existing ? updated : item) : [...list, updated]) } });
     const actual = (await agents()).find(item => item.id === agent.id);
     if (!actual) throw new Error('Registration not saved');
-    return sameRegistration(actual, agent);
+    return sameRegistration(actual, agent)
+      && (actual.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation;
   }
+
   async function register(agent: KimiAgent) {
+    pendingRegistrationGeneration = null;
     log('registration', 'start');
     try {
       const owned = await writeRegistration(agent);
@@ -149,7 +173,9 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
         canReplaceKey: owned, ...(owned ? { catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now() } : {}) });
     } catch {
       log('registration', 'failure', { reason: 'failed' });
-      return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([agent], null, 2) });
+      const manualAgent = pendingRegistrationGeneration
+        ? { ...agent, env: { SVAIB_KIMI_CATALOG_GENERATION: pendingRegistrationGeneration } } : agent;
+      return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([manualAgent], null, 2) });
     }
   }
   async function start(apiKey?: string) {
@@ -161,7 +187,12 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       const run = async () => {
         try {
           if (status.agent && sameRegistration(current, status.agent)) {
-            const upgraded = await prepareProfile(undefined, 'recheck');
+            const manualGeneration = manualGenerationFor(status.agent);
+            const manualApplied = manualGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === manualGeneration;
+            // Manual registration belongs to the already prepared profile.
+            // Mutating it again here would reuse its cache generation for new data.
+            if (!manualApplied && view.manualRegistration) await save({ manualRegistration: null });
+            const upgraded = manualApplied ? status.agent : await prepareProfile(undefined, 'recheck');
             await register(upgraded);
           } else await save({ stage: 'verify', canReplaceKey: false, verifyModel: await resolveVerifyModel() });
           if (view.stage === 'verify') await beginAutomaticCheck();
@@ -178,6 +209,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     // a terminal, a model request, command argv, or the returned view.
     const run = async () => {
       try {
+        if (view.manualRegistration) await save({ manualRegistration: null });
         const agent = await prepareProfile(apiKey, 'setup');
         apiKey = undefined;
         if (!disposed) {
@@ -388,6 +420,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
         await save({ hidden: false, stage: 'installing', phase: 'access', startedAt: Date.now(),
           keyChangedAt: Date.now(), testThreadId: null, verifyModel: null, message: '' });
         await hostMutation('key-replace', 'key-change', diagnosticId => client.call('kimiReplaceKey', { apiKey, diagnosticId }, target()));
+        if (!await writeRegistration(status.agent)) throw new Error('Registration changed');
         const keyChangedAt = Date.now();
         await save({ stage: 'verify', phase: null, hidden: false, testThreadId: null, ownedTestThreadId: null, keyChangedAt, catalogCheckedAt: Date.now(), verifyModel: await resolveVerifyModel(), message: view.automatic ? '' : 'Ключ обновлён. Отправь новый проверочный запрос.' });
         if (view.automatic) { await save({ startedAt: Date.now() }); await beginAutomaticCheck(); }

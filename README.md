@@ -1,6 +1,10 @@
 # svaib for BB
 
-Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.49.0 or later with compatible Plugin SDK 0.6.132. A Codex or Claude Code model connection and a svaib account are configured separately.
+Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex or Claude Code model connection and a svaib account are configured separately.
+
+## Version 0.5.7
+
+Restores installation on BB 0.48.1, including account-specific Kimi context limits, automatic model catalog updates and setup diagnostics. After an owned Kimi profile changes, a harmless generation marker in its ACP registration invalidates both model caches; newer BB keeps its explicit fresh-read request. Existing registration fields, keys, conversation models and the bundled Harness 0.11.0 are preserved.
 
 ## Version 0.5.6
 
