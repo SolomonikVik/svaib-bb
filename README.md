@@ -2,6 +2,10 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex or Claude Code model connection and a svaib account are configured separately.
 
+## Version 0.5.8 — Kimi diagnostics
+
+Kimi setup logs now retain safe system error codes, the failed ACP registration operation, and runtime versions. Bounded probes identify the actual registered Node and the Claude executable selected by the adapter. API keys, paths, command arguments, and full error text are excluded from the log. This release also adds the required BB compatibility preflight to npm CI.
+
 ## Version 0.5.7
 
 Restores installation on BB 0.48.1, including account-specific Kimi context limits, automatic model catalog updates and setup diagnostics. After an owned Kimi profile changes, a harmless generation marker in its ACP registration invalidates both model caches; newer BB keeps its explicit fresh-read request. Existing registration fields, keys, conversation models and the bundled Harness 0.11.0 are preserved.

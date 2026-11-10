@@ -21,7 +21,8 @@ FILES = [
     "*.ts", "*.tsx", "*.css", "tsconfig.json", "assets/", "components/",
     "dist/", "experiments/account-prototype/", "methods/", "npm-release.json",
     "scripts/prepare_methods.py", "scripts/setup-kimi-cc.mjs",
-    "scripts/setup-kimi-cc.d.mts", "PLUGIN_OVERVIEW.md", "README.md",
+    "scripts/setup-kimi-cc.d.mts", "scripts/kimi-diagnostic-fields.mjs",
+    "scripts/kimi-diagnostic-fields.d.mts", "PLUGIN_OVERVIEW.md", "README.md",
 ]
 
 

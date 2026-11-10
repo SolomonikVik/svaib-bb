@@ -6,17 +6,23 @@ import { join } from 'node:path';
 import { inspectKimi, prepareKimi, replaceKimiKey } from '../../kimi-host';
 import { randomUUID } from 'node:crypto';
 import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep } from '../../kimi-diagnostics';
+import { logKimiRuntime } from '../../kimi-runtime-diagnostics';
 
 // The authorization URL never passes through a model, terminal or saved thread.
 export default experimental_defineHostEntry({ contract: browserContract, experimental_signals: kimiDiagnosticSignals, handlers: {
   async kimiInspect(_, context) { return inspectKimi(join(context.experimental_paths.dataDir, 'kimi-cc'), context.signal); },
   async kimiPrepare({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
-    return kimiStep(log, 'prepare', () => prepareKimi(join(context.experimental_paths.dataDir, 'kimi-cc'), apiKey, context.signal, log));
+    const root = join(context.experimental_paths.dataDir, 'kimi-cc');
+    try { return await kimiStep(log, 'prepare', () => prepareKimi(root, apiKey, context.signal, log)); }
+    finally { await logKimiRuntime(root, context.signal, log); }
   },
   async kimiReplaceKey({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
-    await kimiStep(log, 'key-replace', () => replaceKimiKey(join(context.experimental_paths.dataDir, 'kimi-cc'), apiKey, context.signal, fetch, log)); return null;
+    const root = join(context.experimental_paths.dataDir, 'kimi-cc');
+    try { await kimiStep(log, 'key-replace', () => replaceKimiKey(root, apiKey, context.signal, fetch, log)); }
+    finally { await logKimiRuntime(root, context.signal, log); }
+    return null;
   },
   async automaticHooks(input, context) { return nativeHookAutomatic(input, context.signal); },
   async openLogin({ url }) {

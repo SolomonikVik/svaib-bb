@@ -57,6 +57,23 @@ jobs:
         run: python3 tooling/scripts/test_npm_release.py
       - name: Install pinned BB build tool
         run: npm install --prefix bb-tool bb-app@0.49.0 --no-audit --no-fund
+      - name: Test BB compatibility policy
+        run: BB_NPM_PACKAGE="$PWD/bb-tool/node_modules/npm/package.json" node --test tooling/scripts/test-bb-compatibility.mjs
+      - name: Check supported BB and SDK engine ranges
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node tooling/scripts/check-bb-compatibility.mjs \
+            --package plugin/package.json --policy tooling/bb-compatibility.json \
+            --npm-package bb-tool/node_modules/npm/package.json --output bb-compatibility-report.json
+      - name: Preserve BB compatibility report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bb-compatibility
+          path: bb-compatibility-report.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Install locked plugin dependencies without lifecycle scripts
         working-directory: plugin
         run: npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund

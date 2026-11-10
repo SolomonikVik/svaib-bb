@@ -7,6 +7,34 @@ dialog. They do not need Git or an npm account for this installation.
 
 ## Automated releases
 
+New plugin releases from `0.5.8` must admit the latest stable patch of the current
+BB Desktop minor line and two previous lines, starting at the adopted baseline
+`0.48.1`. `bb-compatibility.json` defines this transition. Historical plugin tags
+are not retroactively evaluated or changed. The rule concerns the BB application,
+not the independent versions of this plugin and its bundled Harness.
+
+Before building, `scripts/check-bb-compatibility.mjs` resolves official GitHub
+release tags and their Plugin SDK versions, and rejects `engines.bb` or
+`engines.bbPluginSdk` ranges that exclude a target. Metadata failures block the
+check; the matrix is never silently reduced. CI saves the dated report in the
+`bb-compatibility` artifact. Test selection and engine-range checks use the semver
+implementation shipped with the pinned build tool's npm. This gate does not
+prove runtime compatibility: loading, install/update, preserved settings and the
+changed user flow must also be accepted on each selected BB version before release.
+After publication, check that an unversioned npm install on the oldest supported
+target resolves the new plugin version. Raising SDK build dependencies does not
+authorize raising client minimums.
+
+For a local preflight against an exported candidate (the parent output directory
+must exist):
+
+```sh
+node scripts/check-bb-compatibility.mjs \
+  --package package.json --policy bb-compatibility.json \
+  --npm-package /path/to/bb-tool/node_modules/npm/package.json \
+  --output bb-compatibility-report.json
+```
+
 `.github/workflows/publish-npm.yml` runs when a stable `vX.Y.Z` tag is pushed.
 The tag must match `package.json`. It installs locked production dependencies
 with lifecycle scripts disabled, builds with pinned `bb-app@0.49.0`, packs the

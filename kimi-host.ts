@@ -23,15 +23,15 @@ export function kimiCommand(executable: string, args: string[], signal: AbortSig
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { signal, shell: false, windowsHide: true, env: kimiCommandEnvironment(executable), stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'] });
     let output = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.')); }, capture ? 5_000 : 180_000);
+    const timer = setTimeout(() => { child.kill(); reject(Object.assign(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.'), { name: 'TimeoutError' })); }, capture ? 5_000 : 180_000);
     child.stdout?.on('data', chunk => {
       output += String(chunk);
       if (output.length > 4096) { child.kill(); reject(new Error('Не удалось проверить Node.js.')); }
     });
-    child.once('error', () => { clearTimeout(timer); reject(new Error('Не удалось запустить Node.js или npm.')); });
-    child.once('close', code => {
+    child.once('error', error => { clearTimeout(timer); reject(new Error('Не удалось запустить Node.js или npm.', { cause: error })); });
+    child.once('close', (code, signal) => {
       clearTimeout(timer);
-      if (code === 0) resolve(output); else reject(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.'));
+      if (code === 0) resolve(output); else reject(Object.assign(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.'), { exitCode: code, signal }));
     });
   });
 }

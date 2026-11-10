@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, relative, resolve, sep, win32 } from 'node:path';
 import { spawn } from 'node:child_process';
+import { kimiErrorFields } from './kimi-diagnostic-fields.mjs';
 
 export const ADAPTER = '@agentclientprotocol/claude-agent-acp@0.100.0';
 const MODEL = 'k3.1-pro';
@@ -184,8 +185,8 @@ function legacyEnv() {
 function command(executable, args, options = {}) {
   return new Promise((yes, no) => {
     const child = spawn(executable, args, { stdio: 'inherit', ...options });
-    child.once('error', () => no(new Error('Не удалось запустить установку. Проверь Node.js 22+ и npm.')));
-    child.once('exit', code => code === 0 ? yes() : no(new Error(`Установка завершилась с кодом ${code}. Сохрани текущий шаг и передай помощнику текст ошибки без ключа.`)));
+    child.once('error', error => no(new Error('Не удалось запустить установку. Проверь Node.js 22+ и npm.', { cause: error })));
+    child.once('exit', (code, signal) => code === 0 ? yes() : no(Object.assign(new Error(`Установка завершилась с кодом ${code}. Сохрани текущий шаг и передай помощнику текст ошибки без ключа.`), { exitCode: code, signal })));
   });
 }
 
@@ -259,7 +260,7 @@ async function finishProvision({ root, install, npmCli, nodeExecutable, log }) {
     await install(nodeExecutable,
       [npmCli ?? await npmCliPath(nodeExecutable), 'install', '--prefix', runtime, '--no-audit', '--no-fund', ADAPTER]);
     log('adapter-install', 'success', { elapsedMs: Date.now() - started });
-  } catch (error) { log('adapter-install', 'failure', { reason: 'failed', elapsedMs: Date.now() - started }); throw error; }
+  } catch (error) { log('adapter-install', 'failure', { reason: 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
   const launcher = launcherSource(root);
   await sameOrNew(join(root, 'launch.mjs'), launcher);
   const agent = registration(root, nodeExecutable);
@@ -366,7 +367,7 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
   log('profile-validate', 'start');
   let validated;
   try { validated = await validateProvision(root); }
-  catch (error) { log('profile-validate', 'failure', { reason: 'failed' }); throw error; }
+  catch (error) { log('profile-validate', 'failure', { reason: 'failed', ...kimiErrorFields(error) }); throw error; }
   const { pending, owner, snapshots, catalog: previous } = validated;
   log('profile-validate', 'success');
   const credentials = await readFile(join(root, 'credentials.json'), 'utf8');
@@ -393,6 +394,6 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
     }
     await atomicWrite(ownerPath, JSON.stringify({ ...owner, catalogs: [catalog] }));
     log('profile-write', 'success', { elapsedMs: Date.now() - started });
-  } catch (error) { log('profile-write', 'failure', { reason: 'failed', elapsedMs: Date.now() - started }); throw error; }
+  } catch (error) { log('profile-write', 'failure', { reason: 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
   return registration(root, owner.nodeExecutable);
 }

@@ -43,6 +43,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("scripts", package)
         self.assertIn("dist/", package["files"])
         self.assertIn("methods/", package["files"])
+        self.assertIn("scripts/kimi-diagnostic-fields.mjs", package["files"])
+        self.assertIn("scripts/kimi-diagnostic-fields.d.mts", package["files"])
         self.assertEqual(package["bundleDependencies"], [release.LOCAL_DEPENDENCY])
         self.assertEqual(package["publishConfig"]["registry"], "https://registry.npmjs.org/")
         self.assertEqual(release.read_json(self.root / "npm-release.json")["tag"], "v0.5.5")

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { browserContract } from './experiments/account-prototype/browser-contract';
 import { kimiRpcContract, kimiViewSchema, type KimiAgent, type KimiView } from './kimi-contract';
-import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep, type KimiDiagnostic } from './kimi-diagnostics';
+import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep, kimiErrorFields, kimiVersion, type KimiDiagnostic } from './kimi-diagnostics';
 
 const PROVIDER = 'acp-claude-kimi';
 const SETTINGS_PLUGIN = 'provider-acp';
@@ -11,7 +11,7 @@ const CATALOG_VERSION = 3;
 const CATALOG_TTL = 24 * 60 * 60 * 1000;
 async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('BB timeout')), ms); })]); }
+  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('BB timeout'), { name: 'TimeoutError' })), ms); })]); }
   finally { clearTimeout(timer); }
 }
 
@@ -25,6 +25,21 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     } catch { /* Host signal delivery must also survive a failed log sink. */ }
   };
   const log = kimiDiagnostics(randomUUID(), 'backend', writeDiagnostic);
+  let environmentSnapshot: Promise<void> | undefined;
+  function logEnvironment() {
+    return environmentSnapshot ??= Promise.allSettled([
+      (async () => {
+        const version = kimiVersion((await bounded(bb.sdk.system.version(), 2000)).currentVersion);
+        if (version) log('environment', 'success', { component: 'bb', version });
+      })(),
+      (async () => {
+        const plugin = (await bounded(bb.sdk.plugins.list(), 2000)).plugins.find(item => item.id === bb.pluginId);
+        const version = kimiVersion(plugin?.version);
+        const sdkVersion = kimiVersion(plugin?.app.bundle?.sdkVersion);
+        if (version) log('environment', 'success', { component: 'plugin', version, ...(sdkVersion ? { sdkVersion } : {}) });
+      })(),
+    ]).then(() => {});
+  }
   bb.onDispose(client.experimental_onSignal('kimiDiagnostic', event => {
     if (event.hostId === hostId) writeDiagnostic(event.payload);
   }));
@@ -61,9 +76,10 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     const diagnosticId = randomUUID();
     const operationLog = kimiDiagnostics(diagnosticId, 'backend', writeDiagnostic);
     operationLog(step, 'start', { reason });
+    await logEnvironment();
     const started = Date.now();
     try { const result = await work(diagnosticId); operationLog(step, 'success', { elapsedMs: Date.now() - started }); return result; }
-    catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started }); throw error; }
+    catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
   }
   const prepareProfile = (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => hostMutation('prepare', reason,
     diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
@@ -89,16 +105,21 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   /** Only seed models confirmed by this host's provider catalog. */
   async function resolveVerifyModel(): Promise<string | null> {
     if (!hostId) return null;
+    await logEnvironment();
     const started = Date.now(); log('bb-discovery', 'start');
+    let operation: 'host-inspect' | 'settings-read' | 'provider-models' = 'host-inspect';
     try {
       const status = await client.call('kimiInspect', null, target());
+      operation = 'settings-read';
       const owned = status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
       // Keep the modern freshness request. A variable also typechecks against
       // the older SDK, which ignores the additional property at runtime.
       const query = { hostId, providerId: PROVIDER, preferCached: false };
+      operation = 'provider-models';
       const catalog = await bounded(bb.sdk.providers.models(query));
       if (catalog.modelLoadError || !catalog.providers.some(provider => provider.id === PROVIDER && provider.available)) {
-        log('bb-discovery', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - started }); return null;
+        log('bb-discovery', 'failure', { reason: 'unavailable', operation, elapsedMs: Date.now() - started,
+          ...(catalog.modelLoadError ? { providerErrorCode: catalog.modelLoadError.code, ...kimiErrorFields(catalog.modelLoadError) } : {}) }); return null;
       }
       const allowed = status.verifyModels && owned
         ? new Set(status.verifyModels) : null;
@@ -106,7 +127,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       const selected = (models.find(model => model.id === PREFERRED_MODEL) ?? models.find(model => model.id === 'k3.1-pro[1m]') ?? models.find(model => model.isDefault) ?? models[0])?.id ?? null;
       log('bb-discovery', selected ? 'success' : 'failure', { modelCount: models.length, elapsedMs: Date.now() - started });
       return selected;
-    } catch { log('bb-discovery', 'failure', { reason: 'failed', elapsedMs: Date.now() - started }); return null; }
+    } catch (error) { log('bb-discovery', 'failure', { reason: 'failed', operation, elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); return null; }
   }
   async function inspect() {
     if (await hasProvider()) {
@@ -135,7 +156,8 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     } catch { /* Only a matching manual registration can complete the fallback. */ }
     return undefined;
   }
-  async function writeRegistration(agent: KimiAgent) {
+  async function writeRegistration(agent: KimiAgent, phase: (operation: KimiDiagnostic['operation']) => void = () => {}) {
+    phase('settings-read');
     const list = await agents();
     if (disposed) return false;
     const existing = list.find(item => item.id === agent.id);
@@ -155,9 +177,12 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       ...preserved, ...(!knownCli && modelCli ? { modelCli } : {}),
       env: { ...((existing?.env ?? {}) as Record<string, string>), SVAIB_KIMI_CATALOG_GENERATION: generation },
     };
+    phase('settings-write');
     await bb.sdk.plugins.updateSettings({ pluginId: SETTINGS_PLUGIN,
       values: { customAgents: JSON.stringify(existing ? list.map(item => item === existing ? updated : item) : [...list, updated]) } });
+    phase('settings-readback');
     const actual = (await agents()).find(item => item.id === agent.id);
+    phase('registration-verify');
     if (!actual) throw new Error('Registration not saved');
     return sameRegistration(actual, agent)
       && (actual.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation;
@@ -166,13 +191,14 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   async function register(agent: KimiAgent) {
     pendingRegistrationGeneration = null;
     log('registration', 'start');
+    let operation: KimiDiagnostic['operation'] = 'settings-read';
     try {
-      const owned = await writeRegistration(agent);
+      const owned = await writeRegistration(agent, value => { operation = value; });
       log('registration', owned ? 'success' : 'skipped', owned ? {} : { reason: 'foreign-profile' });
       return save({ stage: 'verify', message: '', manualRegistration: null, verifyModel: await resolveVerifyModel(),
         canReplaceKey: owned, ...(owned ? { catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now() } : {}) });
-    } catch {
-      log('registration', 'failure', { reason: 'failed' });
+    } catch (error) {
+      log('registration', 'failure', { reason: 'failed', operation, ...kimiErrorFields(error) });
       const manualAgent = pendingRegistrationGeneration
         ? { ...agent, env: { SVAIB_KIMI_CATALOG_GENERATION: pendingRegistrationGeneration } } : agent;
       return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([manualAgent], null, 2) });
@@ -266,7 +292,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       if ((error as { status?: number }).status === 404 || (error as { code?: string }).code === 'NOT_FOUND') {
         if (view.ownedTestThreadId === id) await save({ ownedTestThreadId: null, checkToken: null, ...(view.testThreadId === id ? { testThreadId: null } : {}) }); return true;
       }
-      log('cleanup', 'failure', { reason: 'failed' });
+      log('cleanup', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
       return false;
     }
   }
@@ -329,8 +355,8 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       });
       await save({ testThreadId: thread.id, ownedTestThreadId: thread.id });
       watchAutomaticCheck();
-    } catch {
-      log('verification', 'failure', { reason: 'failed' });
+    } catch (error) {
+      log('verification', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
       try { await recoverOwnCheck(); } catch { /* Retry retains the nonce for recovery. */ }
       if (view.ownedTestThreadId) watchAutomaticCheck();
       else await save({ phase: null, message: 'Не удалось запустить проверку Kimi. Проверь подключение к BB и повтори.' });
