@@ -1,6 +1,14 @@
 # svaib for BB
 
-Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104. A Codex or Claude Code model connection and a svaib account are configured separately.
+Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.49.0 or later with compatible Plugin SDK 0.6.132. A Codex or Claude Code model connection and a svaib account are configured separately.
+
+## Version 0.5.6
+
+Kimi setup reads the models, context limits and supported reasoning effort available to your API key. It refreshes the catalog during setup, after a key change and daily. New models appear automatically; existing conversations and the profile default are preserved. Confirmed 1M models use the larger window; a failed catalog request keeps the last model list with conservative limits.
+
+Setup and updates now write structured diagnostics to `bb plugin logs svaib-workplace`. The log records stages, durations and failure categories without keys, filesystem paths or response contents. Interrupted key changes cannot reuse an old verification reply or leave the new key with the previous 1M limit.
+
+The bundled Harness remains 0.11.0. The pinned Claude Code runtime is unchanged; runtime upgrades are separate from model-catalog refreshes. Updating generated settings affects new conversations. The full flow on an actual Plus/Moderato subscription and every desktop platform remains a separate acceptance check.
 
 ## Version 0.5.5
 

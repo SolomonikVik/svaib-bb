@@ -13,11 +13,12 @@ const key = z.string().max(512).regex(/^sk-kimi-[A-Za-z0-9_-]+$/, 'Нужен к
 export const kimiHostStatusSchema = z.object({
   nodeReady: z.boolean(), nodeVersion: z.string().nullable(),
   profile: z.enum(['absent', 'partial', 'ready', 'blocked']), agent: kimiAgentSchema.nullable(),
+  verifyModels: z.array(z.string()).optional(),
 }).strict();
 export const kimiHostMethods = {
   kimiInspect: { input: z.null(), output: kimiHostStatusSchema, experimental_retryable: true },
-  kimiPrepare: { input: z.object({ apiKey: key.optional() }).strict(), output: kimiAgentSchema },
-  kimiReplaceKey: { input: z.object({ apiKey: key }).strict(), output: z.null() },
+  kimiPrepare: { input: z.object({ apiKey: key.optional(), diagnosticId: z.uuid().optional() }).strict(), output: kimiAgentSchema },
+  kimiReplaceKey: { input: z.object({ apiKey: key, diagnosticId: z.uuid().optional() }).strict(), output: z.null() },
 };
 export const kimiViewSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -31,6 +32,7 @@ export const kimiViewSchema = z.object({
   checkToken: z.string().nullable().default(null),
   checkStartedAt: z.number().nullable().default(null),
   catalogVersion: z.number().int().nonnegative().default(0),
+  catalogCheckedAt: z.number().nullable().default(null),
   automatic: z.boolean().default(false),
   ownedTestThreadId: z.string().nullable().default(null),
 }).strict();

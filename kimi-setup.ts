@@ -2,10 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { browserContract } from './experiments/account-prototype/browser-contract';
 import { kimiRpcContract, kimiViewSchema, type KimiAgent, type KimiView } from './kimi-contract';
+import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep, type KimiDiagnostic } from './kimi-diagnostics';
 
 const PROVIDER = 'acp-claude-kimi';
 const SETTINGS_PLUGIN = 'provider-acp';
 const PREFERRED_MODEL = 'k3.1-pro';
+const CATALOG_VERSION = 3;
+const CATALOG_TTL = 24 * 60 * 60 * 1000;
 async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('BB timeout')), ms); })]); }
@@ -14,12 +17,22 @@ async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
 
 /** Owns only local Kimi UI state. It never reads/writes svaib onboarding marks. */
 export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) {
-  const client = bb.hosts.experimental_client({ contract: browserContract });
+  const client = bb.hosts.experimental_client({ contract: browserContract, experimental_signals: kimiDiagnosticSignals });
+  const writeDiagnostic = (event: KimiDiagnostic) => {
+    const line = '[kimi] ' + JSON.stringify(event);
+    try {
+      if (event.outcome === 'failure' || event.outcome === 'fallback') bb.log.warn(line); else bb.log.info(line);
+    } catch { /* Host signal delivery must also survive a failed log sink. */ }
+  };
+  const log = kimiDiagnostics(randomUUID(), 'backend', writeDiagnostic);
+  bb.onDispose(client.experimental_onSignal('kimiDiagnostic', event => {
+    if (event.hostId === hostId) writeDiagnostic(event.payload);
+  }));
   const storageKey = 'kimi-setup:v1:' + (hostId ?? 'unavailable');
   const saved = kimiViewSchema.safeParse(await bb.storage.kv.get(storageKey));
   let view: KimiView = saved.success ? saved.data : {
     revision: 0, canReplaceKey: false, hidden: false, stage: 'intro', message: '', hostId: hostId ?? '', testThreadId: null, verifyModel: null, manualRegistration: null, keyChangedAt: null,
-    phase: null, startedAt: null, checkToken: null, checkStartedAt: null, catalogVersion: 0, automatic: false, ownedTestThreadId: null,
+    phase: null, startedAt: null, checkToken: null, checkStartedAt: null, catalogVersion: 0, catalogCheckedAt: null, automatic: false, ownedTestThreadId: null,
   };
   let job: Promise<void> | null = null;
   let starting: Promise<KimiView> | null = null;
@@ -33,8 +46,10 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   const snapshot = () => ({ ...view });
   async function save(patch: Partial<KimiView>) {
     if (disposed) return snapshot();
+    const changed = patch.stage !== undefined && patch.stage !== view.stage || patch.phase !== undefined && patch.phase !== view.phase;
     view = { ...view, ...patch, revision: view.revision + 1 };
     await bb.storage.kv.set(storageKey, view);
+    if (changed) log('state', 'success', { stage: view.stage, phase: view.phase });
     bb.realtime.publish('kimi-setup-changed', null);
     return snapshot();
   }
@@ -42,6 +57,16 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     if (!hostId) throw new Error('Компьютер BB недоступен. Подключи его и повтори настройку.');
     return { hostId, signal: abort.signal, timeoutMs: 600_000 };
   }
+  async function hostMutation<T>(step: 'prepare' | 'key-replace', reason: KimiDiagnostic['reason'], work: (diagnosticId: string) => Promise<T>) {
+    const diagnosticId = randomUUID();
+    const operationLog = kimiDiagnostics(diagnosticId, 'backend', writeDiagnostic);
+    operationLog(step, 'start', { reason });
+    const started = Date.now();
+    try { const result = await work(diagnosticId); operationLog(step, 'success', { elapsedMs: Date.now() - started }); return result; }
+    catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started }); throw error; }
+  }
+  const prepareProfile = (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => hostMutation('prepare', reason,
+    diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
   async function agents() {
     const current = await bounded(bb.sdk.plugins.getSettings({ pluginId: SETTINGS_PLUGIN }));
     if (!current.schema.customAgents || current.schema.customAgents.type !== 'string') throw new Error('ACP settings unavailable');
@@ -64,12 +89,20 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   /** Only seed models confirmed by this host's provider catalog. */
   async function resolveVerifyModel(): Promise<string | null> {
     if (!hostId) return null;
+    const started = Date.now(); log('bb-discovery', 'start');
     try {
-      const catalog = await bounded(bb.sdk.providers.models({ hostId, providerId: PROVIDER }));
-      if (catalog.modelLoadError || !catalog.providers.some(provider => provider.id === PROVIDER && provider.available)) return null;
-      const models = catalog.models.filter(model => !model.routeProviderId || model.routeProviderId === PROVIDER);
-      return (models.find(model => model.id === PREFERRED_MODEL) ?? models.find(model => model.id === 'k3.1-pro[1m]') ?? models.find(model => model.isDefault) ?? models[0])?.id ?? null;
-    } catch { return null; }
+      const catalog = await bounded(bb.sdk.providers.models({ hostId, providerId: PROVIDER, preferCached: false }));
+      if (catalog.modelLoadError || !catalog.providers.some(provider => provider.id === PROVIDER && provider.available)) {
+        log('bb-discovery', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - started }); return null;
+      }
+      const status = await client.call('kimiInspect', null, target());
+      const allowed = status.verifyModels && status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)
+        ? new Set(status.verifyModels) : null;
+      const models = catalog.models.filter(model => (!model.routeProviderId || model.routeProviderId === PROVIDER) && (!allowed || allowed.has(model.id)));
+      const selected = (models.find(model => model.id === PREFERRED_MODEL) ?? models.find(model => model.id === 'k3.1-pro[1m]') ?? models.find(model => model.isDefault) ?? models[0])?.id ?? null;
+      log('bb-discovery', selected ? 'success' : 'failure', { modelCount: models.length, elapsedMs: Date.now() - started });
+      return selected;
+    } catch { log('bb-discovery', 'failure', { reason: 'failed', elapsedMs: Date.now() - started }); return null; }
   }
   async function inspect() {
     if (await hasProvider()) {
@@ -108,11 +141,14 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     return sameRegistration(actual, agent);
   }
   async function register(agent: KimiAgent) {
+    log('registration', 'start');
     try {
       const owned = await writeRegistration(agent);
+      log('registration', owned ? 'success' : 'skipped', owned ? {} : { reason: 'foreign-profile' });
       return save({ stage: 'verify', message: '', manualRegistration: null, verifyModel: await resolveVerifyModel(),
-        canReplaceKey: owned, ...(owned ? { catalogVersion: 1 } : {}) });
+        canReplaceKey: owned, ...(owned ? { catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now() } : {}) });
     } catch {
+      log('registration', 'failure', { reason: 'failed' });
       return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([agent], null, 2) });
     }
   }
@@ -125,7 +161,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       const run = async () => {
         try {
           if (status.agent && sameRegistration(current, status.agent)) {
-            const upgraded = await client.call('kimiPrepare', {}, target());
+            const upgraded = await prepareProfile(undefined, 'recheck');
             await register(upgraded);
           } else await save({ stage: 'verify', canReplaceKey: false, verifyModel: await resolveVerifyModel() });
           if (view.stage === 'verify') await beginAutomaticCheck();
@@ -142,7 +178,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     // a terminal, a model request, command argv, or the returned view.
     const run = async () => {
       try {
-        const agent = await client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}) }, target());
+        const agent = await prepareProfile(apiKey, 'setup');
         apiKey = undefined;
         if (!disposed) {
           await save({ canReplaceKey: true, phase: 'access' });
@@ -198,10 +234,12 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       if ((error as { status?: number }).status === 404 || (error as { code?: string }).code === 'NOT_FOUND') {
         if (view.ownedTestThreadId === id) await save({ ownedTestThreadId: null, checkToken: null, ...(view.testThreadId === id ? { testThreadId: null } : {}) }); return true;
       }
+      log('cleanup', 'failure', { reason: 'failed' });
       return false;
     }
   }
   async function failAutomaticCheck(message: string, testId: string) {
+    log('verification', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - (view.checkStartedAt ?? Date.now()) });
     await save({ phase: null, message });
     if (view.ownedTestThreadId === testId) {
       try { await checkedThread(testId); await bb.sdk.threads.stop({ threadId: testId }); } catch { /* Retry keeps the owned ID for cleanup. */ }
@@ -242,6 +280,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       await save({ phase: 'check' }); watchAutomaticCheck(); return;
     }
     await save({ phase: 'check', stage: 'verify', checkStartedAt: Date.now(), checkToken: randomUUID(), message: '', testThreadId: null });
+    log('verification', 'start');
     try {
       const model = view.verifyModel;
       if (!model || !hostId) throw new Error('model-unavailable');
@@ -259,6 +298,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       await save({ testThreadId: thread.id, ownedTestThreadId: thread.id });
       watchAutomaticCheck();
     } catch {
+      log('verification', 'failure', { reason: 'failed' });
       try { await recoverOwnCheck(); } catch { /* Retry retains the nonce for recovery. */ }
       if (view.ownedTestThreadId) watchAutomaticCheck();
       else await save({ phase: null, message: 'Не удалось запустить проверку Kimi. Проверь подключение к BB и повтори.' });
@@ -275,7 +315,11 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       if (thread.status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.');
       const { output } = await bounded(bb.sdk.threads.output({ threadId: thread.id }));
       if (!current()) return snapshot();
-      if (output?.trim() !== 'KIMI_READY') return pending('Проверочный ответ не подтверждён. Открой разговор и проверь результат.');
+      if (output?.trim() !== 'KIMI_READY') {
+        if (!quiet) log('verification', 'failure', { reason: 'wrong-response' });
+        return pending('Проверочный ответ не подтверждён. Открой разговор и проверь результат.');
+      }
+      log('verification', 'success', { elapsedMs: Date.now() - (view.checkStartedAt ?? Date.now()) });
       await save({ stage: 'complete', hidden: true, phase: null, message: 'Готово к работе', manualRegistration: null });
       await cleanOwnCheck();
       return snapshot();
@@ -339,10 +383,13 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
         // old key must not complete setup while the key is being replaced.
         await recoverOwnCheck();
         if (!await cleanOwnCheck(false)) throw new Error('cleanup-pending');
-        await save({ hidden: false, stage: 'installing', phase: 'access', startedAt: Date.now(), message: '' });
-        await client.call('kimiReplaceKey', { apiKey }, target());
+        // An RPC failure cannot prove whether the host committed the new key.
+        // Invalidate the old manual binding before crossing that boundary.
+        await save({ hidden: false, stage: 'installing', phase: 'access', startedAt: Date.now(),
+          keyChangedAt: Date.now(), testThreadId: null, verifyModel: null, message: '' });
+        await hostMutation('key-replace', 'key-change', diagnosticId => client.call('kimiReplaceKey', { apiKey, diagnosticId }, target()));
         const keyChangedAt = Date.now();
-        await save({ stage: 'verify', phase: null, hidden: false, testThreadId: null, ownedTestThreadId: null, keyChangedAt, verifyModel: view.verifyModel ?? await resolveVerifyModel(), message: view.automatic ? '' : 'Ключ обновлён. Отправь новый проверочный запрос.' });
+        await save({ stage: 'verify', phase: null, hidden: false, testThreadId: null, ownedTestThreadId: null, keyChangedAt, catalogCheckedAt: Date.now(), verifyModel: await resolveVerifyModel(), message: view.automatic ? '' : 'Ключ обновлён. Отправь новый проверочный запрос.' });
         if (view.automatic) { await save({ startedAt: Date.now() }); await beginAutomaticCheck(); }
         return snapshot();
       } catch (error) {
@@ -351,21 +398,24 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       } finally { replacing = false; }
     },
   });
-  const needsResume = view.stage === 'complete' && view.catalogVersion < 1 && view.canReplaceKey
+  const needsResume = view.stage === 'complete' && view.catalogVersion < CATALOG_VERSION && view.canReplaceKey
     || view.automatic && (view.phase === 'check' || view.stage === 'installing');
   if (needsResume) bb.background.service('kimi-resume', {
     async start(signal) {
       if (signal.aborted || disposed) return;
       // Host calls are forbidden during factory registration. Services start
       // only once BB has registered the plugin and its host entry.
-      if (view.stage === 'complete' && view.catalogVersion < 1 && view.canReplaceKey) {
-        // Upgrade generated 0.4.2 metadata without another model request or reinstall.
+      if (view.stage === 'complete' && view.catalogVersion < CATALOG_VERSION && view.canReplaceKey) {
+        // Refresh owned context limits without another model request or reinstall.
         job = (async () => {
           try {
             const status = await client.call('kimiInspect', null, target());
             if (!status.agent || !sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
-            const agent = await client.call('kimiPrepare', {}, target());
-            if (await writeRegistration(agent)) await save({ automatic: true, catalogVersion: 1, message: 'Готово к работе' });
+            const agent = await prepareProfile(undefined, 'migration');
+            if (await writeRegistration(agent)) {
+              if (!await resolveVerifyModel()) throw new Error('Kimi catalog discovery failed');
+              await save({ automatic: true, catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now(), message: 'Готово к работе' });
+            }
           } catch { bb.log.warn('Не удалось обновить настройки моделей Kimi. Работающее подключение сохранено; повтори проверку в настройках плагина.'); }
         })().finally(() => { job = null; }); void job.catch(() => {});
       }
@@ -383,6 +433,30 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       if (!signal.aborted) await new Promise<void>(resolve => {
         signal.addEventListener('abort', () => resolve(), { once: true });
       });
+    },
+  });
+  async function refreshCatalog(reason: 'scheduled' | 'startup' = 'scheduled') {
+    if (disposed || occupied() || !hostId || view.stage !== 'complete' || !view.canReplaceKey
+      || view.catalogCheckedAt !== null && Date.now() - view.catalogCheckedAt < CATALOG_TTL) return;
+    job = kimiStep(log, 'refresh', async () => {
+      const status = await client.call('kimiInspect', null, target());
+      if (!status.agent || !sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
+      const agent = await prepareProfile(undefined, reason);
+      if (!await writeRegistration(agent)) return;
+      // A failed BB discovery must remain due for retry, even if host settings succeeded.
+      if (!await resolveVerifyModel()) throw new Error('Kimi catalog discovery failed');
+      await save({ catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now() });
+    }).finally(() => { job = null; });
+    await job;
+  }
+  // Hourly inexpensive TTL check; at most one catalog request per day. On a
+  // restart after downtime, refresh immediately once the host entry is available.
+  bb.background.schedule('kimi-catalog-refresh', '0 * * * *', () => refreshCatalog('scheduled'));
+  if (!needsResume) bb.background.service('kimi-catalog-refresh', {
+    async start(signal) {
+      try { if (!signal.aborted) await refreshCatalog('startup'); }
+      catch { bb.log.warn('Не удалось обновить каталог Kimi. Повторим проверку по расписанию.'); }
+      if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
     },
   });
   return { settled: async () => { await starting; await job; } };
