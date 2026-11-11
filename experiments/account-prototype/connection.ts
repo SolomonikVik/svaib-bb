@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { continuationSchema, continuationInstruction, checkContinuation } from './continuation';
 import type { BbNavigate } from '@get-bb/plugin-sdk/app';
 import type { PluginAgentConfigurationContext, PluginAgentConfiguration } from '@get-bb/plugin-sdk';

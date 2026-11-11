@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "engines": {
-    "bb": ">=0.48.0",
-    "bbPluginSdk": ">=0.6.94 <0.7"
+    "bb": ">=0.48.1",
+    "bbPluginSdk": ">=0.6.104 <0.7"
   },
   "bb": {
     "name": "Screen · пилот svaib",
@@ -37,7 +37,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.6.94",
+    "@get-bb/plugin-sdk": "0.6.104",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -52,7 +52,11 @@
     "./renderer": "./ui/ScreenRenderer.tsx",
     "./scaffold": "./src/scaffold.ts",
     "./agent-session": "./src/agent-session.ts",
-    "./scaffold-import": "./src/scaffold-import.ts"
+    "./scaffold-import": "./src/scaffold-import.ts",
+    "./metrics-model": "./src/metrics-model.ts",
+    "./metrics-view": "./src/metrics-view.ts",
+    "./metrics-chart": "./src/metrics-chart.ts",
+    "./metrics": "./ui/MetricsDashboard.tsx"
   },
   "files": [
     "bb",
@@ -73,6 +77,11 @@
     "ui/scaffold-source.json",
     "ui/scaffold-site.css",
     "src/agent-session.ts",
-    "src/scaffold-import.ts"
+    "src/scaffold-import.ts",
+    "src/metrics-model.ts",
+    "src/metrics-view.ts",
+    "src/metrics-chart.ts",
+    "ui/MetricsDashboard.tsx",
+    "ui/metrics-dashboard.css"
   ]
 }

@@ -420,7 +420,7 @@ export class ConnectFlow {
       const defaults = await sdk.projects.defaultExecutionOptions({ projectId });
       if (defaults) { providerId = defaults.providerId; execution = { ...defaults }; }
     }
-    if (providerId && !supportsConnection(providerId)) throw new Error('Для подключения svaib выбери в BB Codex, Claude Code или Kimi (CC).');
+    if (providerId && !supportsConnection(providerId)) throw new Error('Для подключения svaib выбери в BB Codex, Claude Code, Kimi (CC) или Pi.');
     const continuation: Continuation = continuationSchema.parse({ version: 1,
       sourceThreadId: input.threadId, captured: !!input.continuation, sourceProjectId: projectId, sourceEnvironmentId, data: input.continuation ?? {
         intent: 'Подключить svaib', scope: 'connection-only', nextStep: 'Проверить подключение', materials: [], constraints: [], agreements: [] } });

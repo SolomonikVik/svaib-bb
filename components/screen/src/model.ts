@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
+import { metricsDashboardSchema } from './metrics-model';
 import { scaffoldConfigSchema, scaffoldConfirmationSchema, scaffoldCatalog, type ScaffoldConfirmation } from './scaffold';
 
 export const idSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
@@ -12,6 +13,7 @@ export const blockSchema = z.discriminatedUnion('type', [
   z.object({ id: idSchema, type: z.literal('tasks'), version: z.literal(1), title: text,
     items: z.array(task).max(200) }).strict(),
   z.object({ id: idSchema, type: z.literal('scaffold'), version: z.literal(1), title: text, config: scaffoldConfigSchema }).strict(),
+  z.object({ id: idSchema, type: z.literal('metrics'), version: z.literal(1), title: text, data: metricsDashboardSchema }).strict(),
   z.object({ id: idSchema, type: z.literal('chart'), version: z.literal(1), title: text,
     unit: z.string().max(40), source, verifiedAt: z.iso.datetime(),
     points: z.array(z.object({ label: text, value: z.number().finite().nullable(),
@@ -54,11 +56,13 @@ export type EventPage = { events: ScreenEvent[]; cursor: number; screen: Screen;
 
 export const catalog = {
   schemaVersion: 1,
+  metricsDashboardVersion: 1,
   overviewVersion: 1,
   overviewRefreshVersion: 1,
   components: [
     { type: 'note', version: 1, description: 'Текстовое пояснение' },
     { type: 'tasks', version: 1, description: 'Задачи, локальный фильтр и выбор для передачи агенту' },
+    { type: 'metrics', version: 1, description: 'Панель показателей: месяцы/годы, факт/план, несколько серий, оперативный срез, статусы и источники; metricsDashboardVersion=1' },
     { type: 'chart', version: 1, description: 'График факт/план; пропуск не подменяется нулём; таблица значений' },
     { type: 'scaffold', version: 1, description: 'Конструктор каркаса, семантический JSON и подтверждение конкретной ревизии структуры' },
   ],

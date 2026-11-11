@@ -118,6 +118,11 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
         description: 'Задать вопрос по материалам компании.', icon: 'MessageSquare', prompt: 'Помоги разобраться с моим вопросом по компании.',
         method: 'Начни с инструкций и карты выбранного пространства. Поднимай только нужные материалы.', sourceIds: [] }],
     }), ...(prepared ? { metricsUpdateWorkspaceId: prepared.id } : {}), id: companyWorkspaceId(companyId), name, companyId, root, projectId: project.id, environmentId: environment.id, hostId: environment.hostId };
+    // Adopted company tabs read the server Screen. Keep legacy snapshots on disk
+    // for explicit migration, but do not expose an independent editable copy.
+    delete workspace.metrics;
+    delete workspace.metricsDashboard;
+    workspace.actions = workspace.actions.filter(action => action.effect !== 'metrics-refresh');
     return { workspace, legacyId: prepared?.id, projectName: project.name, member: verified.member };
   }
   async function catalog(): Promise<{ accountId: string | null; companies: CompanyDirectory['companies'];

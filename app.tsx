@@ -238,7 +238,7 @@ function WorkplacePage({ subPath = "", overview }: Partial<PluginNavPanelProps> 
   useEffect(() => { if (scroll.current) scroll.current.scrollTop = positions.current.get(viewKey) ?? 0; }, [viewKey]);
   const place: Place = 'returnTo' in view ? view.returnTo : view;
   const handlers = workspace ? {
-    workspace,
+    workspace, accountId: data?.accountId,
     onNavigate: (next: Place) => { if (next.kind === "aspect" && next.aspectId === "metrics") refresh(); go(next); },
     onSource: (sourceId: string) => go({ kind: "source", sourceId, returnTo: place }),
     onAction: (action: Action, context?: ActionContext) => go({ kind: "action", action, context, returnTo: place }),

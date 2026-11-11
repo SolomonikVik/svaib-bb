@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 // No transcript, tool output or credential-shaped strings belong in a continuation.
 const text = z.string().trim().min(1).max(800).refine(value =>

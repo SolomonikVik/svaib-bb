@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import manifest from './scaffold-catalog.json';
 export const scaffoldVisibilityPolicy = {
   canonicalDotPaths: ['.svaib'],

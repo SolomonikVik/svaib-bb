@@ -7,7 +7,7 @@ import manifest from '../src/scaffold-catalog.json';
 import source from './scaffold-source.json';
 import './scaffold-site.css';
 import type { ScaffoldFrameMessage } from './raw';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 const html = source.replace('__SCREEN_TEMPLATES__', JSON.stringify(manifest.templates.map(item => item.path)).replaceAll('<', '\\u003c'))
   .replace('__SCREEN_VISIBILITY_POLICY__', JSON.stringify(scaffoldVisibilityPolicy).replaceAll('<', '\\u003c'));

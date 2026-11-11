@@ -14,6 +14,7 @@ import { registerAccountModule } from './experiments/account-prototype/account-m
 import { CONNECTION_SKILL } from './experiments/account-prototype/connection';
 import { supportsConnection } from './experiments/account-prototype/connection-providers';
 import { registerScreenModule } from './screen-module';
+import { registerMetricsScreenModule } from './metrics-screen-module';
 import { createScreenPluginContext, type PersistentRootValidator } from './screen-native-context';
 import { companyWorkspaceRpc, createCompanyWorkspaces, isCompanyWorkspace, matchesCompanyProfileScope, type CompanyProfileScope } from './company-workspaces';
 
@@ -77,8 +78,8 @@ export async function buildOverview(config: WorkplaceConfig): Promise<Overview> 
       goal: item.goal, goalLabel: item.goalLabel, updatedAt, sources,
       snapshotAt: item.snapshotAt, signals: item.signals,
       actions: item.actions.map(({ method, sourceIds, ...action }) => action),
-      ...(item.planner ? { planner: item.planner } : {}), ...(item.metrics ? { metrics: item.metrics } : {}),
-      ...(item.metricsDashboard ? { metricsDashboard: item.metricsDashboard } : {}),
+      ...(item.planner ? { planner: item.planner } : {}), ...(!item.companyId && item.metrics ? { metrics: item.metrics } : {}),
+      ...(!item.companyId && item.metricsDashboard ? { metricsDashboard: item.metricsDashboard } : {}),
       ...(item.aspects ? { aspects: item.aspects } : {}),
       ...(item.personal ? { personal: item.personal } : {}),
       ...(item.clientHub ? { clientHub: item.clientHub } : {}),
@@ -197,6 +198,14 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     onScopesChanged: scopes => { claimedScopes = scopes; } });
   claimedLegacy = new Set(await companies.claimedLegacyIds());
   claimedScopes = await companies.claimedScopes();
+  const metricsScreen = registerMetricsScreenModule(bb, { account, validatePersistentRootForTesting,
+    resolveWorkspace: async id => {
+      const catalog = await companies.catalog();
+      const page = catalog.workspaces.find(item => item.visible && item.workspace.id === id);
+      if (!page || page.member.account_id !== catalog.accountId) throw new Error('Рабочее место компании недоступно.');
+      return page;
+    },
+  });
   const screen = registerScreenModule(bb, { account, validatePersistentRootForTesting });
   const workContext = createScreenPluginContext({ sdk: bb.sdk, kv: bb.storage.kv, account, validatePersistentRootForTesting });
   const contextTool = 'svaib_workspace_context';
@@ -256,7 +265,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     }
     const setup = own && context.pluginMetadata.task === 'svaib-connect';
     const supported = supportsConnection(context.provider.id);
-    const base = setup ? account.configure(context) : own ? workplaceConfiguration(context)
+    const base = setup ? account.configure(context) : own && metricsScreen.isTask(context.pluginMetadata) ? metricsScreen.configure(context) : own ? workplaceConfiguration(context)
       : supported ? account.configure(context) : { tools: [], skills: [] };
     const finishedSetup = setup && context.pluginMetadata.phase === 'work';
     // BB freezes tools when constructing the provider session. A metadata-only
@@ -269,7 +278,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
       ? `${base.instructions}\n\nПосле успешного whoami, если согласованный сценарий включает подготовку пространства, продолжи его по правилам пользователя. ${visual.instructions}`
       : supported && !own ? [base.instructions, visual.instructions].filter(Boolean).join('\n\n') : base.instructions;
     return {
-      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? [])])],
+      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? []), ...(supported && (!setup || finishedSetup || configuredSetup) ? [metricsScreen.tool] : [])])],
       skills: [...new Set([...(base.skills ?? []), ...(visual.skills ?? []), ...(!setup && supported ? [CONNECTION_SKILL] : [])])],
       // Native/work chats discover available tools without receiving another task's instructions.
       ...(instructions ? { instructions } : {}),
@@ -363,6 +372,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
           const config = await currentConfig();
           const target = config.workspaces.filter(w => w.id === requestedId || w.metricsUpdateWorkspaceId === requestedId);
           if (target.length !== 1) throw new Error('Нет действительного доступа к рабочему месту этих графиков. Открой нужную компанию заново.');
+          if (target[0].companyId) throw new Error('Эта страница использует серверный Screen. Обнови его через общий MCP screen_update; apply-metrics доступен только локальному режиму.');
           const scope = (w: CatalogWorkspace) => JSON.stringify([w.companyId ?? null, w.root, w.projectId, w.environmentId, w.hostId]);
           const expected = scope(target[0]);
           const physicalId = target[0].metricsUpdateWorkspaceId ?? target[0].id;

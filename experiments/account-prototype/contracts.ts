@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 // UI preferences do not grant permission to execute any business operation.
 export const profileSchema = z.object({

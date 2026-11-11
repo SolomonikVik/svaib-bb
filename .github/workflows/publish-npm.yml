@@ -56,7 +56,7 @@ jobs:
       - name: Test release tooling
         run: python3 tooling/scripts/test_npm_release.py
       - name: Install pinned BB build tool
-        run: npm install --prefix bb-tool bb-app@0.49.0 --no-audit --no-fund
+        run: npm install --prefix bb-tool bb-app@0.48.1 --no-audit --no-fund
       - name: Test BB compatibility policy
         run: BB_NPM_PACKAGE="$PWD/bb-tool/node_modules/npm/package.json" node --test tooling/scripts/test-bb-compatibility.mjs
       - name: Check supported BB and SDK engine ranges

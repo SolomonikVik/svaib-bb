@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import manifest from './scaffold-catalog.json';
 import { treeConfigSchema, planTree } from './scaffold-tree-model';
 

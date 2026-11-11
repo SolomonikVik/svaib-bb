@@ -1,5 +1,5 @@
 /** Shared gateway protocol adapters for the composed BB Screen module. */
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import type { ScreenTransport } from 'bb-plugin-svaib-screen-pilot/renderer';
 import {
   confirmScaffoldSchema, idSchema, screenSchema, submitSchema, updateSchema,

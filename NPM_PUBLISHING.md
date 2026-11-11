@@ -37,7 +37,7 @@ node scripts/check-bb-compatibility.mjs \
 
 `.github/workflows/publish-npm.yml` runs when a stable `vX.Y.Z` tag is pushed.
 The tag must match `package.json`. It installs locked production dependencies
-with lifecycle scripts disabled, builds with pinned `bb-app@0.49.0`, packs the
+with lifecycle scripts disabled, builds with pinned `bb-app@0.48.1`, packs the
 plugin, then installs the tarball with `git` disabled. Checks cover all three
 BB bundles and their metadata, the bundled local Screen dependency, and native
 Harness preparation for both Codex and Claude Code. Consumer checks use Node
@@ -45,14 +45,25 @@ Harness preparation for both Codex and Claude Code. Consumer checks use Node
 check host syntax. The installed package is rejected if it contains esbuild,
 native add-ons, platform executables, or root installation/build hooks.
 
-This avoids the Git installation's local esbuild step, including the reported
-`_SecTrustCopyCertificateChain` error on an Intel Mac with macOS 11.7.11. For npm
-sources BB uses the prebuilt app/server/host files; no local compiler is needed.
-Node 24 is used on the CI build runner only. The npm package does not raise the
-OS requirements of an already working BB installation. The BB application,
-model adapter and external tools have their own compatibility limits. A real
-macOS 11 device remains the acceptance check; a Linux/modern macOS run does not
-prove that complete user flow.
+The build targets BB 0.48.1 / SDK 0.6.104, the oldest admitted runtime.
+Verification rejects artifacts built by another BB/SDK; pinning the plugin's
+SDK dependency alone does not select the builder's metadata version. Source
+compatibility with SDK 0.6.132 is checked separately from artifact creation.
+
+npm installation does not run this package's build/install hooks and preserves
+its prebuilt frontend. For SDK major zero, BB accepts a prebuilt server only
+when its exact SDK matches the runtime. A different SDK may cause BB to rebuild
+the server with its own cached toolchain, downloading that toolchain on first
+use. Thus npm is not an unconditional promise of no local compilation. Aligning
+the artifact with SDK104 prevents that fallback on BB0.48.1. Newer BB/SDK
+combinations require their own runtime acceptance.
+
+The rejected SDK132 artifact triggered esbuild0.28.1 download on a clean
+BB0.48.1 Linux runtime. Its official Darwin x64 binary declares Mach-O minimum
+macOS12, so this fallback must not be presented as a macOS11 remedy. Node24 is
+used on the CI runner; consumer checks remain Node22.23.4. A real macOS11.7.11
+Intel device remains an open acceptance check, including the reported
+`_SecTrustCopyCertificateChain` case, model adapter and external tools.
 
 The publish job receives only the verified tarball, checks its SHA256, and
 publishes that exact artifact. Build artifacts and source/hash receipts remain

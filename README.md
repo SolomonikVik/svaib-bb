@@ -1,10 +1,12 @@
 # svaib for BB
 
-Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex or Claude Code model connection and a svaib account are configured separately.
+Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
-## Version 0.5.8 — Kimi diagnostics
+## Version 0.6.0
 
-Kimi setup logs now retain safe system error codes, the failed ACP registration operation, and runtime versions. Bounded probes identify the actual registered Node and the Claude executable selected by the adapter. API keys, paths, command arguments, and full error text are excluded from the log. This release also adds the required BB compatibility preflight to npm CI.
+The metrics page now shows the shared server Screen dashboard, with a saved binding, first fill and a native discussion composer that preserves the selected metric and period. BB and the browser use the same renderer and server document; old local snapshots are not uploaded automatically.
+
+The bundled Harness is **0.12.0**. The common payload includes the Pi adapter; BB preserves an existing Pi provider, model and permissions. The complete Pi account/company/folder/Screen flow remains a separate live acceptance check. One verified npm package supports BB 0.48.1 and 0.49.0: BB 0.48.1 uses the SDK104 bundles directly, while a newer SDK may trigger BB's own backend rebuild. Existing settings and the working model and account connections are preserved. The full flow on a real macOS 11 device and with production OAuth and company metrics remains a separate acceptance check.
 
 ## Version 0.5.7
 
@@ -52,12 +54,13 @@ This is an early access release. The local test build was manually checked in th
 
 ## Installation
 
-For installation without Git or local build tools, paste
-`npm:bb-plugin-svaib-workplace` into BB's **Install from source** dialog. The
-npm package includes prebuilt backend, frontend and host bundles; BB does not
-run esbuild on the user's computer for this source. This avoids the reported
-Git-install failure on macOS 11.7.11 involving `_SecTrustCopyCertificateChain`.
-The complete flow on that device still needs acceptance on the actual Mac.
+Paste `npm:bb-plugin-svaib-workplace` into BB's **Install from source** dialog.
+You do not install Git or build tools manually. The package includes a prebuilt
+frontend and backend. It targets BB0.48.1 / SDK0.6.104 so that runtime can use
+the backend directly. A BB release with a different SDK may automatically
+rebuild the backend using BB's own toolchain.
+The complete flow on an Intel Mac with macOS11.7.11 remains unverified; npm alone
+does not guarantee a fix for the reported `_SecTrustCopyCertificateChain` error.
 
 Install `https://github.com/SolomonikVik/svaib-bb` in BB Settings → Installed plugins → Install from source. The package is at the repository root. BB uses its bundled npm and toolchain; users do not install npm or unpack an archive. The ordinary Git URL tracks the default branch; immutable semantic-version tags are available for explicit range tracking.
 

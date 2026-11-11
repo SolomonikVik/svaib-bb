@@ -48,7 +48,7 @@ function checkCompatibility(before: MetricsDashboard, after: MetricsDashboard, c
   if (!sameIds(before.metrics, after.metrics)) throw new Error('Обновление должно сохранить все ID показателей.');
   for (const metric of before.metrics) {
     const next = after.metrics.find(item => item.id === metric.id)!;
-    if (metric.source.url !== next.source.url) throw new Error(`Нельзя менять URL источника показателя ${metric.id}.`);
+    if (metric.source.url !== next.source.url || metric.source.ref !== next.source.ref) throw new Error(`Нельзя менять адрес источника показателя ${metric.id}.`);
     if (Date.parse(next.source.verifiedAt) < Date.parse(metric.source.verifiedAt)) throw new Error(`Дата проверки источника ${metric.id} не может двигаться назад.`);
     if (metric.kind !== next.kind || metric.unit !== next.unit || metric.direction !== next.direction) throw new Error(`Нельзя менять смысл или единицу показателя ${metric.id}.`);
     if (!sameIds(metric.series, next.series)) throw new Error(`Обновление должно сохранить все ID серий показателя ${metric.id}.`);

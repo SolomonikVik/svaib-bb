@@ -113,7 +113,7 @@ export function chartOption(plot: MetricPlot, metric: DashboardMetric, mode: Met
     },
     dataZoom: zoom ? [{ type: 'slider', height: 18, bottom: 6, start: 0, end: 100, showDetail: false, brushSelect: false,
       borderColor: 'transparent', backgroundColor: 'transparent', fillerColor: colors.line, handleStyle: { color: colors.muted }, dataBackground: { lineStyle: { color: colors.muted }, areaStyle: { color: colors.line } },
-    }, { type: 'inside', zoomOnMouseWheel: false, moveOnMouseWheel: false, moveOnMouseMove: true }] : [],
+    }] : [],
     series,
   };
 }

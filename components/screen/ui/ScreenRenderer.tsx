@@ -7,6 +7,9 @@ import { SVGRenderer } from 'echarts/renderers';
 import type { Block, Screen } from '../src/model';
 import { ScaffoldEditor, clearScaffoldDrafts, screenErrorMessage } from './ScaffoldEditor';
 import './screen.css';
+import MetricsDashboardPanel, { type MetricDiscussion } from './MetricsDashboard';
+
+export type ScreenDiscussion = MetricDiscussion & { screenId: string; revision: number; blockId: string };
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, SVGRenderer]);
 type ChartBlock = Extract<Block, { type: 'chart' }>;
@@ -54,18 +57,23 @@ export type ScreenTransport = {
 
 const snapshots = new Map<string, Screen>();
 const SNAPSHOT_LIMIT = 20;
-export function clearScreenSnapshots() { snapshots.clear(); clearScaffoldDrafts(); }
+export function clearScreenSnapshots(prefix?: string) {
+  if (!prefix) { snapshots.clear(); clearScaffoldDrafts(); return; }
+  for (const key of snapshots.keys()) if (key.startsWith(prefix)) { snapshots.delete(key); clearScaffoldDrafts(key); }
+}
 function rememberSnapshot(key: string | undefined, screen: Screen) {
   if (!key) return;
   snapshots.delete(key); snapshots.set(key, screen);
   while (snapshots.size > SNAPSHOT_LIMIT) snapshots.delete(snapshots.keys().next().value!);
 }
 
-export function ScreenSurface(props: { transport: ScreenTransport; invalidate?: number; cacheKey?: string }) {
+type SurfaceProps = { transport: ScreenTransport; invalidate?: number; cacheKey?: string; embedded?: boolean; onDiscuss?: (context: ScreenDiscussion) => void };
+export function ScreenSurface(props: SurfaceProps) {
+  if (props.embedded) return <div className="screen-embedded"><ScreenContent {...props} /></div>;
   return <div className="screen-bb-page"><div className="screen-frame"><ScreenContent {...props} /></div></div>;
 }
 
-function ScreenContent({ transport, invalidate = 0, cacheKey }: { transport: ScreenTransport; invalidate?: number; cacheKey?: string }) {
+function ScreenContent({ transport, invalidate = 0, cacheKey, embedded = false, onDiscuss }: SurfaceProps) {
   const cached = cacheKey ? snapshots.get(cacheKey) : undefined;
   const [screen, setScreen] = useState<Screen | null>(cached ?? null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(cached?.submission?.selectedIds ?? []));
@@ -115,7 +123,7 @@ function ScreenContent({ transport, invalidate = 0, cacheKey }: { transport: Scr
     } catch (cause) {
       if (alive.current && current === sequence.current) {
         loadError.current = true; setOnline(false); setError(screenErrorMessage(cause));
-        if (['not_found', 'permission_denied', 'unauthorized', 'context_changed'].includes((cause as {code?: string})?.code ?? '')) {
+        if (['not_found', 'permission_denied', 'unauthorized', 'context_changed', 'context_unavailable', 'authentication_required', 'metrics_required', 'screen_binding_required'].includes((cause as {code?: string})?.code ?? '')) {
           writesAllowed.current = false; ++accessEpoch.current; latest.current = null;
           if (cacheKey) { snapshots.delete(cacheKey); clearScaffoldDrafts(cacheKey); }
           setSelected(new Set()); setScreen(null);
@@ -148,14 +156,14 @@ function ScreenContent({ transport, invalidate = 0, cacheKey }: { transport: Scr
     <ScaffoldEditor block={onlyBlock} screen={screen} transport={editorTransport} receive={receive} cacheKey={cacheKey && `${cacheKey}:${onlyBlock.id}`} />
   </main>;
   return <main className="sv-screen" data-screen-id={screen.id} data-revision={screen.revision}>
-    <header className="screen-header"><div><span className="screen-eyebrow">svaib · Screen</span><h1>{screen.document.title}</h1><p>{screen.document.description}</p></div>
-      <span className="screen-connection">{online ? 'Подключён' : 'Нет связи'}</span></header>
+    {!embedded && <header className="screen-header"><div><span className="screen-eyebrow">svaib · Screen</span><h1>{screen.document.title}</h1><p>{screen.document.description}</p></div>
+      <span className="screen-connection">{online ? 'Подключён' : 'Нет связи'}</span></header>}
     <div className="screen-toolbar">{owners.length > 0 && <label>Ответственный <select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">Все</option>{owners.map(owner => <option key={owner}>{owner}</option>)}</select></label>}
-      <button className="screen-secondary" onClick={() => { setError(''); void load(); }}>Обновить</button></div>
+      <button className="screen-secondary" title="Перечитать сохранённый Screen; источники обновляет партнёр" onClick={() => { setError(''); void load(); }}>Перечитать экран</button></div>
     {error && <p role="alert" className="screen-error">{error}</p>}
     <div className={`screen-blocks screen-${screen.document.layout}`}>
-      {screen.document.blocks.map(block => <section key={block.id} className={`screen-card screen-block-${block.type}`} data-block-id={block.id}><h2>{block.title}</h2>
-        {block.type === 'note' ? <p className="screen-note-text">{block.text}</p> : block.type === 'chart' ? <Chart block={block} /> : block.type === 'scaffold' ?
+      {screen.document.blocks.map(block => <section key={block.id} className={`screen-card screen-block-${block.type}`} data-block-id={block.id}>{!(embedded && block.type === 'metrics') && <h2>{block.title}</h2>}
+        {block.type === 'metrics' ? <MetricsDashboardPanel data={block.data} embedded onDiscuss={online && onDiscuss ? context => onDiscuss({ ...context, screenId: screen.id, revision: screen.revision, blockId: block.id }) : undefined} /> : block.type === 'note' ? <p className="screen-note-text">{block.text}</p> : block.type === 'chart' ? <Chart block={block} /> : block.type === 'scaffold' ?
           <ScaffoldEditor block={block} screen={screen} transport={editorTransport} receive={receive} cacheKey={cacheKey && `${cacheKey}:${block.id}`} /> :
           <ul className="screen-tasks">{block.items.filter(task => filter === 'all' || task.owner === filter).map(task => <li key={task.id}>
             <label><input type="checkbox" aria-label={`Выбрать: ${task.title}`} disabled={screen.canEdit !== true} checked={selected.has(task.id)} onChange={() => { if (screen.canEdit === true) setSelected(previous => { const next = new Set(previous); next.has(task.id) ? next.delete(task.id) : next.add(task.id); return next; }); }} />

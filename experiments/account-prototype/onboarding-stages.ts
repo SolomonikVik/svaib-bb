@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 // This projection consumes the method package's catalog; it does not own a
 // second list of stages or write account/company progress.

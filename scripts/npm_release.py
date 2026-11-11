@@ -17,6 +17,9 @@ import urllib.parse
 NAME = "bb-plugin-svaib-workplace"
 REPOSITORY = "https://github.com/SolomonikVik/svaib-bb"
 LOCAL_DEPENDENCY = "bb-plugin-svaib-screen-pilot"
+# Match the oldest admitted BB so its SDK0 backend can use the prebuilt bundle.
+BUILD_BB_VERSION = "0.48.1"
+BUILD_SDK_VERSION = "0.6.104"
 FILES = [
     "*.ts", "*.tsx", "*.css", "tsconfig.json", "assets/", "components/",
     "dist/", "experiments/account-prototype/", "methods/", "npm-release.json",
@@ -100,6 +103,15 @@ def verify_portable(root):
         raise ValueError("The published plugin must not have installation/build hooks")
 
 
+def verify_build_sdk(meta, kind):
+    built = meta.get("builtWith", {})
+    if (meta.get("sdkVersion") != BUILD_SDK_VERSION
+            or built.get("pluginSdkVersion") != BUILD_SDK_VERSION
+            or built.get("bbVersion") != BUILD_BB_VERSION):
+        raise ValueError("Bundle must use the supported build target "
+                         + BUILD_BB_VERSION + "/" + BUILD_SDK_VERSION + ": " + kind)
+
+
 def verify(root, tag):
     package = read_json(root / "package.json")
     validate_identity(package, tag)
@@ -115,6 +127,7 @@ def verify(root, tag):
             raise ValueError("Bundle identity mismatch: " + kind)
         if meta.get("artifactFormatVersion") != 1:
             raise ValueError("Unsupported bundle format: " + kind)
+        verify_build_sdk(meta, kind)
         if (root / f"dist/{kind}.js").stat().st_size == 0:
             raise ValueError("Empty bundle: " + kind)
         if not (root / package["bb"][kind]).is_file():

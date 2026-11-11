@@ -125,6 +125,30 @@ def _identity(files: dict[str, bytes], version: str) -> None:
         raise PreparationError("Method package identity mismatch")
 
 
+def _pi(files: dict[str, bytes], version: str) -> None:
+    # Older common bundles remain valid for Claude/Codex, but cannot silently
+    # become a Pi installation. Both entry points must describe this payload.
+    for name, prefix in (("package.json", "./plugins/svaib/"),
+                         ("plugins/svaib/package.json", "./")):
+        package = json.loads(files[name])
+        if (package.get("name") != "svaib-plugin" or package.get("version") != version
+                or package.get("pi") != {"extensions": [prefix + "pi/extension.ts"],
+                                         "skills": [prefix + "skills"]}
+                or package.get("dependencies", {}).get("pi-subagents") != "0.87.0"):
+            raise PreparationError("Pi package identity or resources mismatch")
+    for name in ("pi/extension.ts", "pi/child-extension.ts", "pi/delegation.ts", "pi/kimi-schema.ts", "pi/usage-snapshot.ts",
+                 "hooks/bridge_pi.py", "hooks/usage_pi.py", "hooks/usage_log.py", "hooks/usage_claude.py",
+                 "hooks/hook_space.py", "hooks/company_context.py", "hooks/company_operations.json",
+                 "hooks/inject_company.py", "hooks/inject_space_map.py", "hooks/space_map.py",
+                 "hooks/inject_file_spec.py", "hooks/check_deferred_actions.py",
+                 "skills/space-scaffold/file-specs/00_general.md", ".mcp.json", "agents/svaib-scout.md"):
+        if not files.get("plugins/svaib/" + name):
+            raise PreparationError("Pi method payload is incomplete")
+    mcp = json.loads(files["plugins/svaib/.mcp.json"]).get("mcpServers", {}).get("svaib", {})
+    if mcp.get("url") != "https://api.svaib.com/mcp":
+        raise PreparationError("Pi method MCP server mismatch")
+
+
 def _entry(manifest: dict, provider: str) -> dict:
     # Keep readers for the three supported BB minor lines, including their
     # persisted marketplaces. Schema 1 is still used by BB 0.3.x.
@@ -156,7 +180,7 @@ def _locked(path: Path):
 
 
 def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -> dict:
-    if provider not in ("codex", "claude"):
+    if provider not in ("codex", "claude", "pi"):
         raise PreparationError("Unsupported provider")
     source_root = source_root or Path(__file__).resolve().parents[1]
     package = _object(source_root / "package.json")
@@ -171,6 +195,10 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
     files = _snapshot(source, entry.get("files"))
     _host(files, entry["host"])
     _identity(files, entry["version"])
+    if provider == "pi":
+        if manifest["schema"] != 2:
+            raise PreparationError("Pi requires the common method package")
+        _pi(files, entry["version"])
     if manifest["schema"] == 2:
         stages = files.get("plugins/svaib/skills/onboarding/references/stages.json")
         if (stages is None or hashlib.sha256(stages).hexdigest()
@@ -237,7 +265,7 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--provider", choices=("codex", "claude"), required=True)
+    parser.add_argument("--provider", choices=("codex", "claude", "pi"), required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     args = parser.parse_args()
     try:

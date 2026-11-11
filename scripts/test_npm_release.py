@@ -49,6 +49,16 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(package["publishConfig"]["registry"], "https://registry.npmjs.org/")
         self.assertEqual(release.read_json(self.root / "npm-release.json")["tag"], "v0.5.5")
 
+    def test_wrong_bb_builder_or_sdk_refuses_even_when_package_dependency_is_pinned(self):
+        meta = {"sdkVersion": "0.6.104", "builtWith": {
+            "bbVersion": "0.48.1", "pluginSdkVersion": "0.6.104"}}
+        release.verify_build_sdk(meta, "server")
+        for changed in ({**meta, "sdkVersion": "0.6.132"},
+                        {**meta, "builtWith": {**meta["builtWith"], "bbVersion": "0.49.0"}},
+                        {**meta, "builtWith": {**meta["builtWith"], "pluginSdkVersion": "0.6.132"}}):
+            with self.subTest(meta=changed), self.assertRaises(ValueError):
+                release.verify_build_sdk(changed, "server")
+
     def test_wrong_version_or_non_release_ref_refuses_prepare(self):
         for tag in ("main", "v0.5.6", "v0.5.5-beta.1", "v0.5.5;echo bad"):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
