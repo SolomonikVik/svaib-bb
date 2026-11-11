@@ -246,7 +246,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
         }
       } catch {
         apiKey = undefined;
-        if (!disposed) await save({ stage: 'registration', phase: null, message: 'Не удалось завершить настройку. Проверь интернет и нажми «Продолжить настройку». Сохранённый профиль не перезаписывается.' });
+        if (!disposed) await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль Kimi. Существующие файлы сохранены. Нажми «Продолжить настройку»; если ошибка повторяется, попроси партнёра проверить журнал настройки.' });
       }
     };
     job = run().finally(() => { job = null; });

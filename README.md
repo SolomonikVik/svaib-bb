@@ -2,6 +2,10 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
+## Version 0.6.1
+
+Fixes Kimi through Claude Code setup after installing Claude plugins. Generated profiles now retain `enabledPlugins` and `extraKnownMarketplaces` during migration and model-catalog updates, including when Claude has reordered the JSON. Changes to managed Kimi settings still block an update. Keys and plugin settings are preserved; generic setup errors no longer assume a network problem. The bundled Harness remains 0.12.0, and the pinned model runtime is unchanged.
+
 ## Version 0.6.0
 
 The metrics page now shows the shared server Screen dashboard, with a saved binding, first fill and a native discussion composer that preserves the selected metric and period. BB and the browser use the same renderer and server document; old local snapshots are not uploaded automatically.

@@ -160,15 +160,23 @@ function contextSettingsV2(policy = safePolicy()) {
   };
 }
 
-// Reconstruct only a byte-for-byte generated profile. Any user edit is preserved.
-function generatedSettings(text) {
-  if ([catalogSettings(), catalogSettings(true)].some(value => text === JSON.stringify(value, null, 2))) return true;
+// Plugin commands may reorder JSON. Only known plugin additions permit semantic
+// comparison; every managed value and every other field must still match.
+function sameSettings(text, expected, structural = false) {
+  if (!structural) return text === JSON.stringify(expected, null, 2);
+  const canonical = value => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return JSON.stringify(canonical(JSON.parse(text))) === JSON.stringify(canonical(expected));
+}
+
+function generatedSettings(text, structural = false) {
+  if ([catalogSettings(), catalogSettings(true)].some(value => sameSettings(text, value, structural))) return true;
   try {
     const value = JSON.parse(text);
     const shortWindow = Number(value.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS);
     if (!Number.isSafeInteger(shortWindow) || shortWindow <= 0 || shortWindow > SHORT_WINDOW) return false;
     const longModels = MODELS.filter(([id]) => value.availableModels?.includes(`${id}[1m]`)).map(([id]) => id);
-    return text === JSON.stringify(contextSettingsV2({ shortWindow, longModels }), null, 2);
+    return sameSettings(text, contextSettingsV2({ shortWindow, longModels }), structural);
   } catch { return false; }
 }
 function legacyEnv() {
@@ -340,19 +348,34 @@ export async function validateProvision(root) {
   const pending = [];
   const snapshots = [['setup-owner.json', ownerText]];
   let catalog;
+  let settingsAdditions = {};
   for (const [name, before, after] of files) {
     const actual = await readFile(join(root, name), 'utf8');
     snapshots.push([name, actual]);
     const interim = name === 'bb-agent.json' ? JSON.stringify(registration(root, owner.nodeExecutable, 'catalog'), null, 2) : null;
-    if (name === 'claude/settings.json') catalog = owner.catalogs?.find(value => actual === JSON.stringify(dynamicSettings(value), null, 2));
-    const known = name === 'claude/settings.json' ? !!catalog || generatedSettings(actual)
+    let ownedSettings = actual;
+    if (name === 'claude/settings.json') {
+      // Claude's plugin commands legitimately extend this same file. They do
+      // not own Kimi's model fields; retain their values during catalog updates.
+      const parsed = JSON.parse(actual);
+      for (const key of ['enabledPlugins', 'extraKnownMarketplaces']) {
+        if (!Object.hasOwn(parsed, key)) continue;
+        const value = parsed[key];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Профиль настройки изменён. Существующие файлы сохранены.');
+        settingsAdditions[key] = value;
+        delete parsed[key];
+      }
+      if (Object.keys(settingsAdditions).length) ownedSettings = JSON.stringify(parsed, null, 2);
+      catalog = owner.catalogs?.find(value => sameSettings(ownedSettings, dynamicSettings(value), Object.keys(settingsAdditions).length > 0));
+    }
+    const known = name === 'claude/settings.json' ? !!catalog || generatedSettings(ownedSettings, Object.keys(settingsAdditions).length > 0)
       : actual === before || actual === after || actual === interim || name === 'launch.mjs'
         && [true, 'context'].some(previous => actual === launcherSource(root, false, previous));
     if (!known) throw new Error('Профиль настройки изменён. Существующие файлы сохранены.');
     if (name === 'claude/settings.json') continue;
     if (actual !== after) pending.push([name, after]);
   }
-  return { pending, owner, snapshots, catalog: catalog ?? seedCatalog() };
+  return { pending, owner, snapshots, settingsAdditions, catalog: catalog ?? seedCatalog() };
 }
 
 async function atomicWrite(path, content) {
@@ -368,7 +391,7 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
   let validated;
   try { validated = await validateProvision(root); }
   catch (error) { log('profile-validate', 'failure', { reason: 'failed', ...kimiErrorFields(error) }); throw error; }
-  const { pending, owner, snapshots, catalog: previous } = validated;
+  const { pending, owner, snapshots, settingsAdditions, catalog: previous } = validated;
   log('profile-validate', 'success');
   const credentials = await readFile(join(root, 'credentials.json'), 'utf8');
   const { apiKey } = JSON.parse(credentials);
@@ -388,7 +411,7 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
     // recognizable, while an unrelated edit still fails the byte-for-byte check.
     const ownerPath = join(root, 'setup-owner.json');
     await atomicWrite(ownerPath, JSON.stringify({ ...owner, catalogs: [catalog, previous] }));
-    pending.push(['claude/settings.json', JSON.stringify(dynamicSettings(catalog), null, 2)]);
+    pending.push(['claude/settings.json', JSON.stringify({ ...dynamicSettings(catalog), ...settingsAdditions }, null, 2)]);
     for (const [name, after] of pending) {
       await atomicWrite(join(root, name), after);
     }
