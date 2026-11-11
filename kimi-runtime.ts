@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, win32 } from 'node:path';
+import { kimiErrorFields, type KimiDiagnosticLog } from './kimi-diagnostics';
 import { experimental_hostToolchain as toolchain } from '@get-bb/plugin-sdk/process';
 
 const VERSION = '22.23.4';
@@ -68,21 +69,34 @@ async function regular(path: string, directory = false) {
   if (info.isSymbolicLink() || (directory ? !info.isDirectory() : !info.isFile())) throw new Error('Папка runtime изменена. Существующие файлы сохранены.');
 }
 
-async function download(url: string, signal: AbortSignal, limit: number) {
-  const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]), redirect: 'error' });
-  if (!response.ok || !response.body) throw new Error('Не удалось скачать компоненты Node.js. Проверь интернет и повтори.');
-  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+export async function downloadKimiNode(url: string, signal: AbortSignal, limit: number, artifact: 'node-checksums' | 'node-archive', log: KimiDiagnosticLog,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; heartbeatMs?: number } = {}) {
+  const started = Date.now(); let size = 0; let totalBytes: number | undefined;
+  const pulse = () => log('runtime-download', 'progress', { artifact, component: 'node', elapsedMs: Date.now() - started, downloadBytes: size, ...(totalBytes ? { totalBytes } : {}) });
+  log('runtime-download', 'start', { artifact, component: 'node' });
+  const heartbeat = setInterval(pulse, options.heartbeatMs ?? 5000);
   try {
-    while (true) {
-      const { value, done } = await reader.read(); if (done) break;
-      size += value.byteLength; if (size > limit) throw new Error('Размер загрузки Node.js превышает ожидаемый.');
-      chunks.push(value);
-    }
-    return Buffer.concat(chunks);
-  } finally { await reader.cancel().catch(() => {}); }
+    const response = await (options.fetchImpl ?? fetch)(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(options.timeoutMs ?? 300_000)]), redirect: 'error' });
+    if (!response.ok || !response.body) throw new Error('Не удалось скачать компоненты Node.js. Проверь интернет и повтори.');
+    const length = Number(response.headers.get('content-length'));
+    if (Number.isSafeInteger(length) && length > 0 && length <= limit) totalBytes = length;
+    const reader = response.body.getReader(); const chunks: Uint8Array[] = [];
+    try {
+      while (true) {
+        const { value, done } = await reader.read(); if (done) break;
+        size += value.byteLength; if (size > limit) throw new Error('Размер загрузки Node.js превышает ожидаемый.');
+        chunks.push(value);
+      }
+      log('runtime-download', 'success', { artifact, component: 'node', elapsedMs: Date.now() - started, downloadBytes: size, ...(totalBytes ? { totalBytes } : {}) });
+      return Buffer.concat(chunks);
+    } finally { await reader.cancel().catch(() => {}); }
+  } catch (error) {
+    log('runtime-download', 'failure', { artifact, component: 'node', elapsedMs: Date.now() - started, downloadBytes: Math.min(size, limit), reason: 'failed', ...kimiErrorFields(error) });
+    throw error;
+  } finally { clearInterval(heartbeat); }
 }
 
-async function managedRuntime(parent: string, signal: AbortSignal): Promise<KimiRuntime> {
+async function managedRuntime(parent: string, signal: AbortSignal, log: KimiDiagnosticLog): Promise<KimiRuntime> {
   const spec = nodeArchive(process.platform, process.arch);
   const base = join(parent, 'node-runtime'); await mkdir(base, { recursive: true, mode: 0o700 }); await regular(base, true);
   const target = join(base, spec.directory);
@@ -100,8 +114,8 @@ async function managedRuntime(parent: string, signal: AbortSignal): Promise<Kimi
   const temp = await mkdtemp(join(base, '.prepare-'));
   try {
     const origin = `https://nodejs.org/dist/v${VERSION}/`;
-    const sums = await download(origin + 'SHASUMS256.txt', signal, 128_000);
-    const archive = await download(origin + spec.file, signal, 150 * 1024 * 1024);
+    const sums = await downloadKimiNode(origin + 'SHASUMS256.txt', signal, 128_000, 'node-checksums', log);
+    const archive = await downloadKimiNode(origin + spec.file, signal, 150 * 1024 * 1024, 'node-archive', log);
     checkedNodeArchive(archive, sums.toString('utf8'), spec.file);
     const archivePath = join(temp, spec.file); await writeFile(archivePath, archive);
     const extraction = nodeExtractCommand(process.platform, archivePath, temp);
@@ -121,9 +135,9 @@ async function managedRuntime(parent: string, signal: AbortSignal): Promise<Kimi
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
 
-export async function ensureKimiRuntime(profileRoot: string, signal: AbortSignal, options: { forceManaged?: boolean } = {}) {
+export async function ensureKimiRuntime(profileRoot: string, signal: AbortSignal, options: { forceManaged?: boolean; log?: KimiDiagnosticLog } = {}) {
   if (!options.forceManaged) { const ready = await existingKimiRuntime(signal); if (ready) return ready; }
   const parent = dirname(profileRoot);
   const pending = jobs.get(parent); if (pending) return pending;
-  const run = managedRuntime(parent, signal).finally(() => jobs.delete(parent)); jobs.set(parent, run); return run;
+  const run = managedRuntime(parent, signal, options.log ?? (() => {})).finally(() => jobs.delete(parent)); jobs.set(parent, run); return run;
 }

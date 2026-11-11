@@ -15,7 +15,7 @@ export default experimental_defineHostEntry({ contract: browserContract, experim
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
     const root = join(context.experimental_paths.dataDir, 'kimi-cc');
     try { return await kimiStep(log, 'prepare', () => prepareKimi(root, apiKey, context.signal, log)); }
-    finally { await logKimiRuntime(root, context.signal, log); }
+    catch (error) { await logKimiRuntime(root, context.signal, log); throw error; }
   },
   async kimiReplaceKey({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));

@@ -29,6 +29,13 @@ export const kimiViewSchema = z.object({
   keyChangedAt: z.number().nullable().default(null),
   phase: z.enum(['components', 'access', 'check']).nullable().default(null),
   startedAt: z.number().nullable().default(null),
+  installProgress: z.object({
+    step: z.enum(['runtime-download', 'adapter-install', 'runtime-probe']),
+    component: z.enum(['node', 'adapter', 'claude-code']).optional(),
+    artifact: z.enum(['node-checksums', 'node-archive']).optional(),
+    downloadBytes: z.number().int().nonnegative().optional(),
+    totalBytes: z.number().int().positive().optional(),
+  }).strict().nullable().optional(),
   checkToken: z.string().nullable().default(null),
   checkStartedAt: z.number().nullable().default(null),
   catalogVersion: z.number().int().nonnegative().default(0),

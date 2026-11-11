@@ -19,7 +19,7 @@ export function kimiBinaryHeader(bytes: Buffer): { binaryFormat: 'pe' | 'elf' | 
 }
 
 /** Bounded, private probe output. Stop the whole owned process group on overflow/abort/timeout. */
-export async function kimiProbe(executable: string, args: string[], signal: AbortSignal, maxBytes = 4096): Promise<string> {
+export async function kimiProbe(executable: string, args: string[], signal: AbortSignal, maxBytes = 4096, timeoutMs = 3000): Promise<string> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
@@ -52,7 +52,7 @@ export async function kimiProbe(executable: string, args: string[], signal: Abor
       if (chunk.length > maxBytes - bytes) { stop(Object.assign(new Error('Probe output too large'), { name: 'OutputLimitError' })); return; }
       bytes += chunk.length; chunks.push(chunk);
     };
-    const timer = setTimeout(() => stop(Object.assign(new Error('Probe timeout'), { name: 'TimeoutError' })), 3000);
+    const timer = setTimeout(() => stop(Object.assign(new Error('Probe timeout'), { name: 'TimeoutError' })), timeoutMs);
     child.stdout.on('data', collect);
     signal.addEventListener('abort', onAbort, { once: true });
     if (signal.aborted) onAbort();
@@ -66,7 +66,7 @@ export async function kimiProbe(executable: string, args: string[], signal: Abor
 // Run inside the registered Node. Use the adapter's own resolver, including its
 // architecture/libc selection and SDK dependency context. Paths stay in this
 // bounded internal response; none are forwarded to the diagnostic sink.
-const RUNTIME_INFO = String.raw`
+export const KIMI_RUNTIME_INFO = String.raw`
 import { readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -94,55 +94,58 @@ try {
 console.log(JSON.stringify(info));
 `;
 
+/** Required installation gate. Each probe has its own deadline and closed diagnostic fields. */
+export async function verifyKimiRuntime(root: string, nodeExecutable: string, signal: AbortSignal, log: KimiDiagnosticLog) {
+  async function binary(component: 'node' | 'claude-code', executable: string) {
+    try {
+      const file = await open(executable, 'r');
+      try {
+        const bytes = Buffer.alloc(4096);
+        const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+        log('binary', 'success', { component, ...kimiBinaryHeader(bytes.subarray(0, bytesRead)), fileBytes: (await file.stat()).size });
+      } finally { await file.close(); }
+    } catch (error) { log('binary', 'failure', { component, reason: 'failed', ...kimiErrorFields(error) }); throw error; }
+  }
+  async function probe(component: 'node' | 'adapter' | 'claude-code', executable: string, args: string[], maxBytes = 4096) {
+    const started = Date.now(); log('runtime-probe', 'start', { component });
+    try {
+      const output = await kimiProbe(executable, args, signal, maxBytes, 30_000);
+      log('runtime-probe', 'success', { component, elapsedMs: Date.now() - started });
+      return output;
+    } catch (error) { log('runtime-probe', 'failure', { component, elapsedMs: Date.now() - started, reason: 'failed', ...kimiErrorFields(error) }); throw error; }
+  }
+  const hostVersion = kimiVersion(process.version);
+  const osRelease = release().match(/^\d{1,5}(?:\.\d{1,5}){1,3}$/u)?.[0];
+  log('environment', 'success', { component: 'host-worker', ...(hostVersion ? { version: hostVersion } : {}), ...(osRelease ? { osRelease } : {}),
+    platform: ['win32', 'darwin', 'linux'].includes(process.platform) ? process.platform : 'other',
+    arch: ['x64', 'arm64', 'ia32'].includes(process.arch) ? process.arch : 'other' });
+  await binary('node', nodeExecutable);
+  const nodeVersion = kimiVersion((await probe('node', nodeExecutable, ['--version'])).trim());
+  if (!nodeVersion) throw new Error('Не удалось проверить версию Node.js.');
+  log('environment', 'success', { component: 'node', version: nodeVersion });
+  const info = JSON.parse(await probe('adapter', nodeExecutable, ['--input-type=module', '-e', KIMI_RUNTIME_INFO, root], 16384));
+  log('environment', 'success', { component: 'node', version: nodeVersion, arch: ['x64', 'arm64', 'ia32'].includes(info.arch) ? info.arch : 'other' });
+  for (const [value, component] of [[info.adapterVersion, 'adapter'], [info.sdkVersion, 'claude-sdk']] as const) {
+    const version = kimiVersion(value);
+    if (!version) throw new Error('Не удалось проверить компоненты Kimi. Повтори установку.');
+    log('environment', 'success', { component, version });
+  }
+  if (typeof info.nativePath !== 'string' || info.nativePath.length > 8192 || !isAbsolute(info.nativePath)) {
+    log('environment', 'failure', { component: 'claude-code', reason: 'unavailable', ...kimiErrorFields(info.nativeError) });
+    throw new Error('Не найден исполняемый файл Claude Code. Повтори установку.');
+  }
+  await binary('claude-code', info.nativePath);
+  const claudeVersion = kimiVersion((await probe('claude-code', info.nativePath, ['--version'])).trim());
+  if (!claudeVersion) throw new Error('Не удалось проверить запуск Claude Code. Повтори установку.');
+  log('environment', 'success', { component: 'claude-code', version: claudeVersion });
+}
+
 export async function logKimiRuntime(root: string, signal: AbortSignal, log: KimiDiagnosticLog) {
   try {
-    const version = kimiVersion(process.version);
-    const osRelease = release().match(/^\d{1,5}(?:\.\d{1,5}){1,3}/u)?.[0];
-    log('environment', 'success', { component: 'host-worker', ...(version ? { version } : {}), ...(osRelease ? { osRelease } : {}),
-      platform: ['win32', 'darwin', 'linux'].includes(process.platform) ? process.platform : 'other',
-      arch: ['x64', 'arm64', 'ia32'].includes(process.arch) ? process.arch : 'other' });
-    const readJson = async (path: string) => {
-      if ((await stat(path)).size > 65536) throw new Error('Metadata too large');
-      return JSON.parse(await readFile(path, 'utf8'));
-    };
-    async function binary(component: 'node' | 'claude-code', executable: string) {
-      try {
-        const file = await open(executable, 'r');
-        try {
-          const bytes = Buffer.alloc(4096);
-          const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-          log('binary', 'success', { component, ...kimiBinaryHeader(bytes.subarray(0, bytesRead)), fileBytes: (await file.stat()).size });
-        } finally { await file.close(); }
-        return true;
-      } catch (error) { log('binary', 'failure', { component, reason: 'failed', ...kimiErrorFields(error) }); return false; }
-    }
-    const owner = await readJson(join(root, 'setup-owner.json'));
-    // Only inspect a profile whose generated files pass their ordinary ownership check.
+    if ((await stat(join(root, 'setup-owner.json'))).size > 65536) throw new Error('Metadata too large');
+    const owner = JSON.parse(await readFile(join(root, 'setup-owner.json'), 'utf8'));
     const { validateProvision } = await import('./scripts/setup-kimi-cc.mjs');
     await validateProvision(root);
-    if (!await binary('node', owner.nodeExecutable)) return;
-    const started = Date.now(); log('runtime-probe', 'start', { component: 'node' });
-    let info;
-    try {
-      info = JSON.parse(await kimiProbe(owner.nodeExecutable, ['--input-type=module', '-e', RUNTIME_INFO, root], signal, 16384));
-      const version = kimiVersion(info.nodeVersion);
-      log('runtime-probe', version ? 'success' : 'skipped', { component: 'node', elapsedMs: Date.now() - started,
-        arch: ['x64', 'arm64', 'ia32'].includes(info.arch) ? info.arch : 'other',
-        ...(version ? { version } : { reason: 'unavailable' }) });
-    } catch (error) { log('runtime-probe', 'failure', { component: 'node', elapsedMs: Date.now() - started, reason: 'failed', ...kimiErrorFields(error) }); return; }
-    for (const [value, component] of [[info.adapterVersion, 'adapter'], [info.sdkVersion, 'claude-sdk']] as const) {
-      const version = kimiVersion(value);
-      log('environment', version ? 'success' : 'skipped', { component, ...(version ? { version } : { reason: 'unavailable' }) });
-    }
-    if (typeof info.nativePath !== 'string' || info.nativePath.length > 8192 || !isAbsolute(info.nativePath)) {
-      log('environment', 'skipped', { component: 'claude-code', reason: 'unavailable', ...kimiErrorFields(info.nativeError) }); return;
-    }
-    if (!await binary('claude-code', info.nativePath)) return;
-    log('runtime-probe', 'start', { component: 'claude-code' }); const nativeStarted = Date.now();
-    try {
-      const version = kimiVersion((await kimiProbe(info.nativePath, ['--version'], signal)).trim());
-      log('runtime-probe', version ? 'success' : 'skipped', { component: 'claude-code', elapsedMs: Date.now() - nativeStarted,
-        ...(version ? { version } : { reason: 'unavailable' }) });
-    } catch (error) { log('runtime-probe', 'failure', { component: 'claude-code', elapsedMs: Date.now() - nativeStarted, reason: 'failed', ...kimiErrorFields(error) }); }
+    await verifyKimiRuntime(root, owner.nodeExecutable, signal, log);
   } catch (error) { log('environment', 'skipped', { reason: 'unavailable', ...kimiErrorFields(error) }); }
 }

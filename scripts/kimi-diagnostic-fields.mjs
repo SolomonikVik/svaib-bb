@@ -1,5 +1,5 @@
 // Only closed codes leave an exception. Never return message, stack, argv or paths.
-export const KIMI_ERROR_CODES = ['EFTYPE', 'ENOEXEC', 'ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EIO', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ABORT_ERR', 'ERR_ABORTED', 'NOT_FOUND', 'UNSUPPORTED', 'UNKNOWN'];
+export const KIMI_ERROR_CODES = ['EBUSY', 'EFTYPE', 'ENOEXEC', 'ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'ENOTDIR', 'EEXIST', 'ENOSPC', 'EIO', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT', 'ABORT_ERR', 'ERR_ABORTED', 'NOT_FOUND', 'UNSUPPORTED', 'UNKNOWN'];
 export function kimiErrorFields(error) {
   const fields = {};
   const seen = new Set();

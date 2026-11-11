@@ -2,6 +2,12 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
+## Version 0.6.2
+
+Kimi setup now allows up to 15 minutes for npm installation, reports download and installation progress, and verifies Node, the adapter and Claude Code before activating a new runtime. Interrupted or damaged owned runtimes can be reinstalled without replacing the API key. Installation is staged with rollback and serialized across workers. Each Node download has a five-minute limit.
+
+Managed Kimi through Claude Code keeps the default main agent and hides the Agent picker. Internal helpers remain available for delegation; model, reasoning and permission choices are preserved. Existing generated profiles migrate without replacing keys or reinstalling the model runtime. The bundled Harness remains 0.12.0.
+
 ## Version 0.6.1
 
 Fixes Kimi through Claude Code setup after installing Claude plugins. Generated profiles now retain `enabledPlugins` and `extraKnownMarketplaces` during migration and model-catalog updates, including when Claude has reordered the JSON. Changes to managed Kimi settings still block an update. Keys and plugin settings are preserved; generic setup errors no longer assume a network problem. The bundled Harness remains 0.12.0, and the pinned model runtime is unchanged.

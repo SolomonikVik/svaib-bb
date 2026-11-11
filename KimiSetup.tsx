@@ -101,6 +101,12 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
   const elapsed = Math.max(0, Math.floor((now - (view.startedAt ?? now)) / 1000));
   const phaseLabels = ['Устанавливаю компоненты', 'Настраиваю доступ', 'Проверяю ответ Kimi', 'Готово к работе'];
   const phaseIndex = view.stage === 'complete' ? 3 : ['components', 'access', 'check'].indexOf(view.phase ?? '');
+  const progress = view.installProgress;
+  const progressLabel = progress?.step === 'runtime-download'
+    ? progress.artifact === 'node-checksums' ? 'Получаю контрольные суммы Node.js…' : 'Скачиваю Node.js…'
+    : progress?.step === 'adapter-install' ? 'Скачиваю и устанавливаю Claude Code. На медленном соединении это может занять до 15 минут…'
+    : progress?.step === 'runtime-probe' ? progress.component === 'claude-code' ? 'Проверяю запуск Claude Code…'
+      : progress.component === 'adapter' ? 'Проверяю адаптер Kimi…' : 'Проверяю запуск Node.js…' : null;
   const dismiss = (reason: 'declined' | 'other-agent') => {
     setKey(''); void act(() => rpc.call('kimiDismiss', { reason })).then(ok => { if (ok && settings) setOpened(false); });
   };
@@ -133,6 +139,9 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
       <ol>{phaseLabels.map((label, index) => <li key={label} aria-current={index === phaseIndex ? 'step' : undefined} className={index < phaseIndex ? 'done' : ''}>
         <span aria-hidden="true" className={index === phaseIndex && view.phase ? 'svb-kimi-spinner' : ''}>{index < phaseIndex ? '✓' : index + 1}</span>{label}
       </li>)}</ol>
+      {view.phase === 'components' && progressLabel && <p>{progressLabel}
+        {progress?.downloadBytes !== undefined && <> Получено {(progress.downloadBytes / 1048576).toFixed(1)} МБ{progress.totalBytes ? ` из ${(progress.totalBytes / 1048576).toFixed(1)} МБ` : ''}.</>}
+      </p>}
       {view.phase && <p>Подожди здесь — статус обновится автоматически. Прошло {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')}.</p>}
       {(connectionError || connection !== 'connected') && <p className="svb-kimi-note">{connectionError || 'Восстанавливаю связь с BB… Статус обновится после подключения.'}</p>}
     </div>}

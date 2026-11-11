@@ -7,7 +7,7 @@ import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep, kimiErrorFields, kimi
 const PROVIDER = 'acp-claude-kimi';
 const SETTINGS_PLUGIN = 'provider-acp';
 const PREFERRED_MODEL = 'k3.1-pro';
-const CATALOG_VERSION = 3;
+const CATALOG_VERSION = 4;
 const CATALOG_TTL = 24 * 60 * 60 * 1000;
 async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,12 +40,26 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
       })(),
     ]).then(() => {});
   }
+  let activePreparation: string | null = null;
   bb.onDispose(client.experimental_onSignal('kimiDiagnostic', event => {
-    if (event.hostId === hostId) writeDiagnostic(event.payload);
+    if (event.hostId !== hostId) return;
+    const entry = event.payload;
+    writeDiagnostic(entry);
+    if (entry.diagnosticId !== activePreparation || view.stage !== 'installing' || view.phase !== 'components') return;
+    if (!['runtime-download', 'adapter-install', 'runtime-probe'].includes(entry.step) || !['start', 'progress', 'success'].includes(entry.outcome)) return;
+    // Ephemeral progress never races persisted state writes; a reload resumes the operation.
+    view = { ...view, revision: view.revision + 1, installProgress: {
+      step: entry.step as 'runtime-download' | 'adapter-install' | 'runtime-probe',
+      ...(entry.component && ['node', 'adapter', 'claude-code'].includes(entry.component) ? { component: entry.component as 'node' | 'adapter' | 'claude-code' } : {}),
+      ...(entry.artifact ? { artifact: entry.artifact } : {}),
+      ...(entry.downloadBytes !== undefined ? { downloadBytes: entry.downloadBytes } : {}),
+      ...(entry.totalBytes ? { totalBytes: entry.totalBytes } : {}),
+    } };
+    bb.realtime.publish('kimi-setup-changed', null);
   }));
   const storageKey = 'kimi-setup:v1:' + (hostId ?? 'unavailable');
   const saved = kimiViewSchema.safeParse(await bb.storage.kv.get(storageKey));
-  let view: KimiView = saved.success ? saved.data : {
+  let view: KimiView = saved.success ? { ...saved.data, installProgress: null } : {
     revision: 0, canReplaceKey: false, hidden: false, stage: 'intro', message: '', hostId: hostId ?? '', testThreadId: null, verifyModel: null, manualRegistration: null, keyChangedAt: null,
     phase: null, startedAt: null, checkToken: null, checkStartedAt: null, catalogVersion: 0, catalogCheckedAt: null, automatic: false, ownedTestThreadId: null,
   };
@@ -62,7 +76,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   async function save(patch: Partial<KimiView>) {
     if (disposed) return snapshot();
     const changed = patch.stage !== undefined && patch.stage !== view.stage || patch.phase !== undefined && patch.phase !== view.phase;
-    view = { ...view, ...patch, revision: view.revision + 1 };
+    view = { ...view, ...(patch.phase !== undefined || patch.stage !== undefined ? { installProgress: null } : {}), ...patch, revision: view.revision + 1 };
     await bb.storage.kv.set(storageKey, view);
     if (changed) log('state', 'success', { stage: view.stage, phase: view.phase });
     bb.realtime.publish('kimi-setup-changed', null);
@@ -70,7 +84,7 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   }
   function target() {
     if (!hostId) throw new Error('Компьютер BB недоступен. Подключи его и повтори настройку.');
-    return { hostId, signal: abort.signal, timeoutMs: 600_000 };
+    return { hostId, signal: abort.signal, timeoutMs: 35 * 60_000 };
   }
   async function hostMutation<T>(step: 'prepare' | 'key-replace', reason: KimiDiagnostic['reason'], work: (diagnosticId: string) => Promise<T>) {
     const diagnosticId = randomUUID();
@@ -78,8 +92,10 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     operationLog(step, 'start', { reason });
     await logEnvironment();
     const started = Date.now();
+    activePreparation = diagnosticId;
     try { const result = await work(diagnosticId); operationLog(step, 'success', { elapsedMs: Date.now() - started }); return result; }
     catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
+    finally { if (activePreparation === diagnosticId) activePreparation = null; }
   }
   const prepareProfile = (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => hostMutation('prepare', reason,
     diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
@@ -218,7 +234,9 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
             // Manual registration belongs to the already prepared profile.
             // Mutating it again here would reuse its cache generation for new data.
             if (!manualApplied && view.manualRegistration) await save({ manualRegistration: null });
+            if (!manualApplied) await save({ phase: 'components' });
             const upgraded = manualApplied ? status.agent : await prepareProfile(undefined, 'recheck');
+            await save({ phase: 'access' });
             await register(upgraded);
           } else await save({ stage: 'verify', canReplaceKey: false, verifyModel: await resolveVerifyModel() });
           if (view.stage === 'verify') await beginAutomaticCheck();

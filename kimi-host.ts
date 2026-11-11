@@ -1,40 +1,14 @@
-import { spawn } from 'node:child_process';
 import { lstat, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join, posix, win32 } from 'node:path';
-import { provision, resumeProvision, registration, upgradeProvision, validateProvision, ADAPTER } from './scripts/setup-kimi-cc.mjs';
+import { join } from 'node:path';
+import { provision, resumeProvision, registration, upgradeProvision, validateProvision, npmCliPath, ADAPTER } from './scripts/setup-kimi-cc.mjs';
 import { kimiAgentSchema } from './kimi-contract';
 import { ensureKimiRuntime, existingKimiRuntime } from './kimi-runtime';
 import { kimiStep, type KimiDiagnosticLog } from './kimi-diagnostics';
+import { installKimiAdapter } from './kimi-adapter-install';
+import { verifyKimiRuntime } from './kimi-runtime-diagnostics';
+export { kimiCommandEnvironment } from './kimi-adapter-install';
 
-/** Windows environment names are case-insensitive, including inside host workers. */
-export function kimiCommandEnvironment(executable: string, environment: NodeJS.ProcessEnv = process.env, platform: string = process.platform) {
-  const env = { ...environment };
-  const paths = platform === 'win32' ? win32 : posix;
-  const pathKeys = Object.keys(env).filter(key => platform === 'win32' ? key.toLowerCase() === 'path' : key === 'PATH');
-  const inherited = pathKeys.map(key => env[key]).filter(Boolean).join(paths.delimiter);
-  for (const key of pathKeys) delete env[key];
-  env[platform === 'win32' ? 'Path' : 'PATH'] = paths.dirname(executable) + paths.delimiter + inherited;
-  return env;
-}
-
-/** The only commands run by setup: a bounded Node probe and pinned npm install. */
-export function kimiCommand(executable: string, args: string[], signal: AbortSignal, capture = false): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { signal, shell: false, windowsHide: true, env: kimiCommandEnvironment(executable), stdio: ['ignore', capture ? 'pipe' : 'ignore', 'ignore'] });
-    let output = '';
-    const timer = setTimeout(() => { child.kill(); reject(Object.assign(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.'), { name: 'TimeoutError' })); }, capture ? 5_000 : 180_000);
-    child.stdout?.on('data', chunk => {
-      output += String(chunk);
-      if (output.length > 4096) { child.kill(); reject(new Error('Не удалось проверить Node.js.')); }
-    });
-    child.once('error', error => { clearTimeout(timer); reject(new Error('Не удалось запустить Node.js или npm.', { cause: error })); });
-    child.once('close', (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(output); else reject(Object.assign(new Error('Установка не завершилась. Проверь интернет и повтори этот шаг.'), { exitCode: code, signal }));
-    });
-  });
-}
 async function node(signal: AbortSignal) {
   return existingKimiRuntime(signal);
 }
@@ -72,10 +46,22 @@ export async function prepareKimi(root: string, apiKey: string | undefined, sign
   signal.throwIfAborted();
   const status = await inspectKimi(root, signal);
   log('profile-inspect', 'success', { profile: status.profile });
-  if (status.profile === 'ready') return upgradeProvision(root, { signal, log });
+  if (status.profile === 'ready') {
+    await validateProvision(root);
+    const owner = JSON.parse(await readFile(join(root, 'setup-owner.json'), 'utf8'));
+    try { await verifyKimiRuntime(root, owner.nodeExecutable, signal, log); }
+    catch (error) {
+      signal.throwIfAborted();
+      log('adapter-install', 'start', { reason: 'repair' });
+      await installKimiAdapter(root, owner.nodeExecutable,
+        [await npmCliPath(owner.nodeExecutable), 'install', '--prefix', join(root, 'runtime'), '--no-audit', '--no-fund', ADAPTER], signal, log);
+      log('adapter-install', 'success', { reason: 'repair' });
+    }
+    return upgradeProvision(root, { signal, log });
+  }
   if (status.profile === 'blocked') throw new Error('Папка настройки изменена. Существующие файлы сохранены; нужна помощь партнёра.');
-  const install = async (executable: string, args: string[]) => { await kimiCommand(executable, args, signal); };
-  const runtime = await kimiStep(log, 'runtime', () => ensureKimiRuntime(root, signal));
+  const install = async (executable: string, args: string[]) => { await installKimiAdapter(root, executable, args, signal, log); };
+  const runtime = await kimiStep(log, 'runtime', () => ensureKimiRuntime(root, signal, { log }));
   if (status.profile === 'partial') return resumeProvision({ root, install, npmCli: runtime.npmCli, nodeExecutable: runtime.executable, signal, log });
   if (!apiKey) throw new Error('Введи ключ из консоли Kimi Code.');
   return provision({ root, apiKey, install, nodeExecutable: runtime.executable, npmCli: runtime.npmCli, signal, log });

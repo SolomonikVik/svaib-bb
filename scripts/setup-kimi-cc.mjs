@@ -1,5 +1,5 @@
 // Internal provisioning module for the BB Kimi card. Never put keys in BB settings.
-import { access, chmod, lstat, mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { access, chmod, lstat, mkdir, readFile, writeFile, rename, link, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, relative, resolve, sep, win32 } from 'node:path';
@@ -13,6 +13,86 @@ export const MODELS = [
   ['k3', 'Kimi K3'], ['k3-256k', 'Kimi K3 256K'],
   ['kimi-for-coding', 'Kimi K2.8 Preview'], ['kimi-for-coding-highspeed', 'Kimi K2.7 Code Highspeed (больше квоты)'],
 ];
+// Process-local preload for the pinned adapter. Keep its own entrypoint,
+// transport, authentication, cancellation and native subagents unchanged.
+const DEFAULT_AGENT_POLICY = `import { ClaudeAcpAgent } from './runtime/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js';
+import adapterPackage from './runtime/node_modules/@agentclientprotocol/claude-agent-acp/package.json' with { type: 'json' };
+const installed = new WeakSet();
+const incompatible = () => new Error('Несовместимый адаптер Kimi: политика основного агента недоступна.');
+const hidden = value => Array.isArray(value?.configOptions)
+  ? { ...value, configOptions: value.configOptions.filter(option => option.id !== 'agent') } : value;
+const withoutAgent = params => {
+  const options = params?._meta?.claudeCode?.options;
+  if (!options || !Object.hasOwn(options, 'agent')) return params;
+  const { agent, ...remaining } = options;
+  return { ...params, _meta: { ...params._meta,
+    claudeCode: { ...params._meta.claudeCode, options: remaining } } };
+};
+export function installDefaultAgentPolicy(agent) {
+  if (installed.has(agent)) return;
+  const names = ['createSession', 'getOrCreateSession', 'applyConfigOptionValue',
+    'selectSessionConfigOption', 'newSession', 'loadSession', 'resumeSession',
+    'unstable_forkSession', 'setSessionConfigOption', 'setSessionMode',
+    'startTurn', 'steer', 'closeSession'];
+  if (!agent.sessions || typeof agent.sessions !== 'object'
+    || typeof agent.client?.sessionUpdate !== 'function'
+    || names.some(name => typeof agent[name] !== 'function')) throw incompatible();
+  const original = Object.fromEntries(names.map(name => [name, agent[name].bind(agent)]));
+  const ready = new WeakSet();
+  const update = agent.client.sessionUpdate.bind(agent.client);
+  agent.client.sessionUpdate = params => update(params?.update?.sessionUpdate === 'config_option_update'
+    ? { ...params, update: hidden(params.update) } : params);
+  agent.applyConfigOptionValue = (id, session, name, value) => original.applyConfigOptionValue(
+    id, session, name, name === 'agent' ? 'default' : value);
+  agent.selectSessionConfigOption = async params => {
+    const session = agent.sessions[params.sessionId];
+    // Preserve malformed/missing/closed-session errors. A stale, string-valued
+    // BB selection is cleared even when discovery no longer offers any agents.
+    if (params.configId !== 'agent' || typeof params.value !== 'string'
+      || !session || session.queryClosed) return original.selectSessionConfigOption(params);
+    await original.applyConfigOptionValue(params.sessionId, session, 'agent', 'default');
+    return { configOptions: session.configOptions };
+  };
+  agent.getOrCreateSession = (params, ...rest) => original.getOrCreateSession(withoutAgent(params), ...rest);
+  agent.createSession = async (params, ...rest) => {
+    const response = await original.createSession(withoutAgent(params), ...rest);
+    const id = response.sessionId;
+    const session = agent.sessions[id];
+    try {
+      if (!session || typeof session.query?.applyFlagSettings !== 'function') throw incompatible();
+      // null clears the CLI flag, including settings/extraArgs and a resumed
+      // persona. Do not alter the separate SDK 'agents' definitions.
+      await original.applyConfigOptionValue(id, session, 'agent', 'default');
+      if (agent.sessions[id] !== session || session.queryClosed) throw incompatible();
+      ready.add(session);
+      return response;
+    } catch (error) {
+      if (agent.sessions[id] === session) await original.closeSession({ sessionId: id }).catch(() => {});
+      throw error;
+    }
+  };
+  for (const name of ['startTurn', 'steer']) {
+    agent[name] = (params, ...rest) => {
+      const session = agent.sessions[params.sessionId];
+      if (session && !session.queryClosed && !ready.has(session)) {
+        return Promise.reject(new Error('Основной агент Kimi ещё не готов. Повтори запрос.'));
+      }
+      return original[name](params, ...rest);
+    };
+  }
+  for (const name of ['newSession', 'loadSession', 'resumeSession', 'unstable_forkSession',
+    'setSessionConfigOption', 'setSessionMode']) {
+    agent[name] = async (...args) => hidden(await original[name](...args));
+  }
+  installed.add(agent);
+}
+if (adapterPackage.version !== '0.100.0' || typeof ClaudeAcpAgent.prototype.initialize !== 'function') throw incompatible();
+const initialize = ClaudeAcpAgent.prototype.initialize;
+ClaudeAcpAgent.prototype.initialize = function (...args) {
+  installDefaultAgentPolicy(this);
+  return initialize.apply(this, args);
+};
+`;
 // Keep the previous generated form recognizable for owned-profile migration.
 function catalogSettings(legacy = false) {
   if (legacy) return { env: legacyEnv() };
@@ -270,20 +350,24 @@ async function finishProvision({ root, install, npmCli, nodeExecutable, log }) {
     log('adapter-install', 'success', { elapsedMs: Date.now() - started });
   } catch (error) { log('adapter-install', 'failure', { reason: 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
   const launcher = launcherSource(root);
+  await sameOrNew(join(root, 'agent-policy.mjs'), DEFAULT_AGENT_POLICY, true);
   await sameOrNew(join(root, 'launch.mjs'), launcher);
   const agent = registration(root, nodeExecutable);
   await sameOrNew(join(root, 'bb-agent.json'), JSON.stringify(agent, null, 2));
   return agent;
 }
 
-async function sameOrNew(path, content) {
-  try { await writeFile(path, content, { mode: 0o600, flag: 'wx' }); }
+async function sameOrNew(path, content, atomic = false) {
+  try {
+    if (atomic) await atomicCreate(path, content);
+    else await writeFile(path, content, { mode: 0o600, flag: 'wx' });
+  }
   catch (error) {
     if (error.code !== 'EEXIST' || (await lstat(path)).isSymbolicLink() || await readFile(path, 'utf8') !== content) throw error;
   }
 }
 
-function launcherSource(root, legacy = false, previous = false) {
+function launcherSource(root, legacy = false, previous = false, agentPolicy = true) {
   const adapterDir = join(root, 'runtime', 'node_modules', '@agentclientprotocol', 'claude-agent-acp', 'dist');
   return `import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -325,7 +409,7 @@ if (process.argv.includes('--list-models')) {
     const cli = await claudeCliPath();
     run(cli, process.argv.slice(3), env);
   } else {
-    run(process.execPath, [join(adapterDir, 'index.js'), ...process.argv.slice(2)], env);
+    run(process.execPath, [${!legacy && !previous && agentPolicy ? "'--import', pathToFileURL(join(root, 'agent-policy.mjs')).href, " : ''}join(adapterDir, 'index.js'), ...process.argv.slice(2)], env);
   }
 }
 `;
@@ -342,6 +426,7 @@ export async function validateProvision(root) {
   if (owner.catalogs !== undefined && (!Array.isArray(owner.catalogs) || owner.catalogs.length > 2 || !owner.catalogs.every(validCatalog))) throw new Error('Повреждён каталог настройки.');
   const files = [
     ['claude/settings.json', null, null],
+    ['agent-policy.mjs', null, DEFAULT_AGENT_POLICY],
     ['launch.mjs', launcherSource(root, true), launcherSource(root)],
     ['bb-agent.json', JSON.stringify(registration(root, owner.nodeExecutable, true), null, 2), JSON.stringify(registration(root, owner.nodeExecutable), null, 2)],
   ];
@@ -350,7 +435,14 @@ export async function validateProvision(root) {
   let catalog;
   let settingsAdditions = {};
   for (const [name, before, after] of files) {
-    const actual = await readFile(join(root, name), 'utf8');
+    let actual;
+    try {
+      if ((await lstat(join(root, name))).isSymbolicLink()) throw new Error('Профиль настройки изменён. Ничего не перезаписано.');
+      actual = await readFile(join(root, name), 'utf8');
+    } catch (error) {
+      if (name !== 'agent-policy.mjs' || error.code !== 'ENOENT') throw error;
+      actual = null;
+    }
     snapshots.push([name, actual]);
     const interim = name === 'bb-agent.json' ? JSON.stringify(registration(root, owner.nodeExecutable, 'catalog'), null, 2) : null;
     let ownedSettings = actual;
@@ -370,7 +462,8 @@ export async function validateProvision(root) {
     }
     const known = name === 'claude/settings.json' ? !!catalog || generatedSettings(ownedSettings, Object.keys(settingsAdditions).length > 0)
       : actual === before || actual === after || actual === interim || name === 'launch.mjs'
-        && [true, 'context'].some(previous => actual === launcherSource(root, false, previous));
+        && ([true, 'context'].some(previous => actual === launcherSource(root, false, previous))
+          || actual === launcherSource(root, false, false, false));
     if (!known) throw new Error('Профиль настройки изменён. Существующие файлы сохранены.');
     if (name === 'claude/settings.json') continue;
     if (actual !== after) pending.push([name, after]);
@@ -383,6 +476,16 @@ async function atomicWrite(path, content) {
   try {
     await writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
     await rename(temporary, path);
+  } finally { await rm(temporary, { force: true }); }
+}
+
+async function atomicCreate(path, content) {
+  const temporary = path + '.upgrade-' + randomUUID();
+  try {
+    await writeFile(temporary, content, { mode: 0o600, flag: 'wx' });
+    // Same-directory hard link publishes the complete bytes atomically and
+    // fails with EEXIST instead of replacing a concurrent writer's target.
+    await link(temporary, path);
   } finally { await rm(temporary, { force: true }); }
 }
 
@@ -405,6 +508,11 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
     // Network I/O must not open a window for overwriting edits or a replaced key.
     await validateProvision(root);
     for (const [name, before] of [...snapshots, ['credentials.json', credentials]]) {
+      if (before === null) {
+        try { await lstat(join(root, name)); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        throw new Error('Профиль изменился во время проверки контекста. Повтори настройку.');
+      }
       if (await readFile(join(root, name), 'utf8') !== before) throw new Error('Профиль изменился во время проверки контекста. Повтори настройку.');
     }
     // Journal both known generations first. A crash between file renames remains
@@ -413,7 +521,11 @@ export async function upgradeProvision(root, { fetchImpl = fetch, signal, initia
     await atomicWrite(ownerPath, JSON.stringify({ ...owner, catalogs: [catalog, previous] }));
     pending.push(['claude/settings.json', JSON.stringify({ ...dynamicSettings(catalog), ...settingsAdditions }, null, 2)]);
     for (const [name, after] of pending) {
-      await atomicWrite(join(root, name), after);
+      if (name === 'agent-policy.mjs' && snapshots.some(([path, before]) => path === name && before === null)) {
+        // This path was not owned at inspection. Never replace a file another
+        // writer created after the last snapshot check. Publish the launcher last.
+        await atomicCreate(join(root, name), after);
+      } else await atomicWrite(join(root, name), after);
     }
     await atomicWrite(ownerPath, JSON.stringify({ ...owner, catalogs: [catalog] }));
     log('profile-write', 'success', { elapsedMs: Date.now() - started });
