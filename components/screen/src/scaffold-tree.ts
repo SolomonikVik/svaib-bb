@@ -26,10 +26,11 @@ export function toTreeConfig(config: AnyScaffoldConfig): TreeConfig {
     const existing = entries.get(path); if (existing) return existing;
     const parts = path.split('/'); const name = parts.pop()!; const parent = add(parts.join('/'), true, null);
     const object = objects.get(path);
-    const role = object || path === '01_company' ? 'unit' : /^(01_strategic|02_team|03_metrics|projects|processes|knowledge)$/.test(name) ? 'aspect' : /^0[1-5]_(overview|active|backlog|progress|decisions)\.md$/.test(name) ? 'kit' : /^(_inbox|zz_archive|meetings|_private|\.svaib|usage|source|extractors)$/.test(name) ? 'infrastructure' : /^(docs|contracts|drafts)$/.test(name) ? 'workspace' : 'root';
+    const person = object?.kind === 'employee';
+    const role = person ? 'workspace' : object || path === '01_company' ? 'unit' : /^(01_strategic|02_team|03_metrics|projects|processes|knowledge)$/.test(name) ? 'aspect' : /^0[1-5]_(overview|active|backlog|progress|decisions)\.md$/.test(name) ? 'kit' : /^(_inbox|zz_archive|meetings|_private|\.svaib|usage|source|extractors)$/.test(name) ? 'infrastructure' : /^(docs|contracts|drafts)$/.test(name) ? 'workspace' : 'root';
     const item: TreeItem = { id: path === '01_company' ? 'company' : 'item-' + entries.size, parentId: parent.id, name, type: folder ? 'folder' : 'file', note: object?.name ?? note,
-      role, locked: base.has(path), fixedName: object?.kind === 'ceo', placeholder: false, proposed: false,
-      acceptsBlocks: folder && (Boolean(object) || path === '01_company'), projectContainer: folder && name === 'projects', clientContainer: object?.kind === 'clients', template, screenKind: object?.kind ?? null };
+      role, locked: base.has(path), fixedName: false, placeholder: false, proposed: false,
+      acceptsBlocks: folder && !person && (Boolean(object) || path === '01_company'), projectContainer: folder && name === 'projects', clientContainer: object?.kind === 'clients', template, screenKind: object?.kind ?? null };
     entries.set(path, item); return item;
   }
   const notes: Record<string, string> = { '01_company': 'обязательный unit: компания как целое', 'README.md': 'карта папки', 'AGENTS.md': 'рабочая инструкция AI-агента', 'CLAUDE.md': 'подключение инструкции', 'operating-model.md': 'система управления; читать первой', 'vision.md': 'идентичность и видение', 'goal.md': 'цель и план', 'strategy.md': 'действующие стратегические выборы', '01_org-structure.md': 'карта ролей и подчинения', 'business-metrics.md': 'базовые бизнес-метрики', '_inbox': 'входящее', 'zz_archive': 'архив', '.svaib': 'служебное агента', '01_strategic': 'курс компании', '02_team': 'команда', '03_metrics': 'метрики' };

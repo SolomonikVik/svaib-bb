@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "4.3.2",
-  "canonSnapshot": "e3d59916b6d0",
+  "version": "4.4.0",
+  "canonSnapshot": "11e0b08a3c09",
   "templates": [
     {
       "path": "templates/aspects/01_strategic/goal.md",
@@ -20,8 +20,8 @@
       "sha256": "66fd3df7ccfa54458fdd97fefdf40b6f9919c2694b610aeb42ccf7ace9e53f63"
     },
     {
-      "path": "templates/aspects/02_team/person.md",
-      "sha256": "421f113cff6bb036fe6e4a912bb6bd1d7a1bb8491ca93620f3d06c787b64da09"
+      "path": "templates/aspects/02_team/employee.md",
+      "sha256": "ae0596edf632bb395740d27ed950f951f42cc727626732d451f490609f43845a"
     },
     {
       "path": "templates/aspects/03_metrics/domain-metrics.md",
@@ -92,26 +92,6 @@
       "sha256": "15215aedf8afc65fb845d44817d1ea90e654b2f32b91a000cb2ea4ebfe3164cf"
     },
     {
-      "path": "templates/nodes/ceo/01_profile.md",
-      "sha256": "13d7f244e719d824968672ec8159b1806336d0381ea3e91a5b0c9b5da8378f2a"
-    },
-    {
-      "path": "templates/nodes/ceo/02_active.md",
-      "sha256": "cb7f1b32c1e0286461f483e9551d6cf73f431b5a43165a8ec047a8607464fa48"
-    },
-    {
-      "path": "templates/nodes/ceo/03_thoughts.md",
-      "sha256": "98eb6cb7fc29aabae0f9cdff6ce8fd4314b3cfd02a936f373c1195bd066c679f"
-    },
-    {
-      "path": "templates/nodes/ceo/04_decisions.md",
-      "sha256": "27bcfce099d6895330ecc34f6a8e3094e7624349fee2e6ddf1ad871106cd2c2c"
-    },
-    {
-      "path": "templates/nodes/ceo/README.md",
-      "sha256": "347eee604731712018df48c37dd1fa44683a9b69b1b49eee2103724f1ee10d77"
-    },
-    {
       "path": "templates/nodes/clients/client-name/company.md",
       "sha256": "6aafee04444d0564888dedeb46f8cff0b0b4dcd346c837049d466c484fe81631"
     },
@@ -128,6 +108,10 @@
       "sha256": "92a20ee25f40ca549c9df652a2e371d73dc7a0fe4852aad2804863fd78173761"
     },
     {
+      "path": "templates/nodes/employee/README.md",
+      "sha256": "dbc1830165ed6db620aa6007e9498c74e343bcc5122a9488f64d845fdb6b0a79"
+    },
+    {
       "path": "templates/nodes/product/profile.md",
       "sha256": "d8132da8460d157f8b0733fc85fbbde400c692196249855160ee92deef803613"
     },
@@ -141,7 +125,7 @@
     },
     {
       "path": "templates/README.md",
-      "sha256": "f384703fef5b1806a123c030272af7479ccb1307c6f6ef50888540b1a9055eb0"
+      "sha256": "ca00876a2067c20d942fcc2d45b71a63a0862fb0f87f9ab001a51b9c3398f916"
     },
     {
       "path": "templates/root/_inbox/README.md",
@@ -189,7 +173,7 @@
     },
     {
       "path": "templates/root/01_company/README.md",
-      "sha256": "8395c3463077f428712dba8b18839093249b5e74c3bfeccf0779fe765ee5b976"
+      "sha256": "c557dc8a5a256cee9e35280804947ea7dd25863e9bbf7869a5c43fc1c17e4f1f"
     },
     {
       "path": "templates/root/01_company/zz_archive/README.md",
@@ -197,7 +181,7 @@
     },
     {
       "path": "templates/root/AGENTS.md",
-      "sha256": "cdda39db6a46fc3f04c9f7a1e517c0177b20152e679a47fdb30be74dd4917932"
+      "sha256": "1d4ca129d5948a7f4aa19c5c0eba76d304253caa9e16b1a6a8778df60249989b"
     },
     {
       "path": "templates/root/CLAUDE.md",
@@ -205,7 +189,7 @@
     },
     {
       "path": "templates/root/README.md",
-      "sha256": "594a5dc25f23c9772d25d97357d4f16830de8377d270bb81a0a91de15142e118"
+      "sha256": "4e95c290788eced39380bd7ed45b1cbeafad0a701b56202d8f1ff3eff180ce90"
     },
     {
       "path": "templates/root/zz_archive/README.md",

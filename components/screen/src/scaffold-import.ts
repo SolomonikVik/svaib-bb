@@ -76,14 +76,14 @@ function canonicalRole(path: string, kind: SnapshotKind): ScaffoldRoleEvidence |
     return { role: 'infrastructure', source: 'Карта папки по канону README.' };
   if (kind === 'file' && ['AGENTS.md', 'CLAUDE.md'].includes(name))
     return { role: 'infrastructure', source: 'Правила работы агента в пространстве.' };
-  if (kind === 'file' && path === '00_ceo/01_profile.md')
-    return { role: 'workspace', source: 'Профиль CEO: отдельный документ, не элемент management kit.' };
+  if (kind === 'file' && /(^|\/)02_team\/[^/]+\/01_profile\.md$/.test(path))
+    return { role: 'workspace', source: 'Профиль сотрудника: отдельный документ, не элемент management kit.' };
   if (/^0[1-5]_(overview|active|backlog|progress|decisions)(\.md)?$/.test(name)) {
     const names = ['01_overview', '02_active', '03_backlog', '04_progress', '05_decisions'];
     if (names.includes(name.replace(/\.md$/, '')))
       return { role: 'kit', source: 'Канон management kit: миссия сохраняется в форме файла и папки.' };
   }
-  if (['01_company', '00_ceo'].includes(path) && kind === 'directory') return { role: 'unit', source: path === '00_ceo' ? 'Канон: личный управленческий контекст CEO.' : 'Компания: обязательный узел пространства.' };
+  if (path === '01_company' && kind === 'directory') return { role: 'unit', source: 'Компания: обязательный узел пространства.' };
   return undefined;
 }
 function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Record<string, ScaffoldRoleEvidence>): ScaffoldTreeConfig {
@@ -104,7 +104,7 @@ function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Reco
     const collection = entry.opaqueReason?.match(/^collection:(\d+):(\d+)$/);
     const boundary = collection ? `Содержимое: папок — ${collection[1]}, файлов — ${collection[2]}.` : entry.opaqueReason === 'depth_limit' ? 'Не загружено.' : entry.opaqueReason === 'private' ? 'Приватное. Содержимое скрыто.' : locked ? 'Содержимое не раскрыто.' : '';
     const note = [boundary, evidence ? `Основание: ${evidence.source}` : role === 'root' ? 'Роль не определена.' : ''].filter(Boolean).join(' ');
-    tree.push({ ...root, id: itemId(entry.path), parentId: parent ? itemId(parent) : 'root', name, type: folder ? 'folder' : 'file', note, role, locked, acceptsBlocks: unit && !locked, projectContainer: false, screenKind: unit ? entry.path === '00_ceo' ? 'ceo' : 'unit' : null });
+    tree.push({ ...root, id: itemId(entry.path), parentId: parent ? itemId(parent) : 'root', name, type: folder ? 'folder' : 'file', note, role, locked, acceptsBlocks: unit && !locked, projectContainer: false, screenKind: unit ? 'unit' : null });
     if (folder) { visible.add(entry.path); if (locked) protectedParents.add(entry.path); }
   }
   // Template provenance is deliberately null: filename similarity does not

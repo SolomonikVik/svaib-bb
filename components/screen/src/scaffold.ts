@@ -7,9 +7,17 @@ export const kitKeys = ['overview', 'active', 'backlog', 'progress', 'decisions'
 export const kitLabels = { overview: 'Обзор', active: 'Текущая работа', backlog: 'Бэклог', progress: 'Прогресс', decisions: 'Решения' };
 export const strategicKeys = ['vision', 'goal', 'strategy'] as const;
 export const strategicLabels = { vision: 'Видение', goal: 'Цель', strategy: 'Стратегия' };
+// Каталоги до 4.4.0 знали узел `ceo` (`00_ceo/`) и `_private/{владелец}/` в любом объекте.
+// Подтверждённые тогда экраны читаются как были; новые структуры этих форм не получают.
+const LEGACY_BEFORE = [4, 4, 0];
+export const isLegacyCatalog = (version: string) => {
+  const parts = version.split('.').map(Number);
+  for (let i = 0; i < 3; i++) { const a = parts[i] ?? 0; if (Number.isNaN(a)) return false; if (a !== LEGACY_BEFORE[i]) return a < LEGACY_BEFORE[i]; }
+  return false;
+};
 const unique = <T extends z.ZodType>(schema: T) => z.array(schema).max(10).refine(items => new Set(items).size === items.length, 'Повторяющийся элемент.');
 export const scaffoldNodeSchema = z.object({
-  id: key, kind: z.enum(['unit', 'project', 'product', 'clients', 'client', 'ceo']), parentId: z.string().min(1).max(50),
+  id: key, kind: z.enum(['unit', 'project', 'product', 'clients', 'client', 'employee', 'ceo']), parentId: z.string().min(1).max(50),
   name: z.string().trim().min(1).max(100), slug: z.string().regex(/^(?:[a-z][a-z0-9-]{0,49}|00_ceo)$/),
   form: z.enum(['file', 'folder']), owner: z.string().trim().max(100), reason: z.string().trim().min(1).max(500),
   kit: unique(z.enum(kitKeys)), strategicFiles: unique(z.enum(strategicKeys)),
@@ -21,12 +29,13 @@ export const semanticScaffoldConfigSchema = z.object({
   extras: z.array(z.object({ ownerId: z.string().min(1).max(50), kind: z.enum(['strategic', 'team', 'metrics', 'projects', 'processes', 'knowledge', 'inbox', 'private', 'meetings', 'archive', 'docs', 'contracts', 'drafts']), slug: key.optional() }).strict()).max(160).optional(),
 }).strict().superRefine((config, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
+  const legacy = isLegacyCatalog(config.catalogVersion);
   const nodes = new Map(config.nodes.map(node => [node.id, node]));
   if (nodes.size !== config.nodes.length || nodes.has('root') || nodes.has('company')) issue('ID объектов должны быть уникальны; root и company зарезервированы.');
   const reserved = new Set(['01-company', 'company', 'projects', 'processes', 'knowledge', 'readme', 'agents', 'claude', 'source', 'extractors', 'meetings']);
   const siblings = new Set<string>();
   for (const node of config.nodes) {
-    const sibling = `${node.parentId}/${node.kind === 'project' ? 'projects/' : ''}${node.slug}`;
+    const sibling = `${node.parentId}/${node.kind === 'project' ? 'projects/' : node.kind === 'employee' ? '02_team/' : ''}${node.slug}`;
     if (siblings.has(sibling) || reserved.has(node.slug)) issue(`Недопустимое или повторяющееся имя папки: ${node.slug}.`);
     siblings.add(sibling);
     const parent = nodes.get(node.parentId);
@@ -36,9 +45,13 @@ export const semanticScaffoldConfigSchema = z.object({
     if (node.kind === 'unit' && node.parentId === 'company') issue('Направление верхнего уровня живёт в корне; у компании размещайте общие проекты.');
     if (node.kind === 'project' && (node.parentId === 'root' || node.form !== 'folder' || node.strategicFiles.length)) issue('Проект размещается в projects/ у владельца; цель проекта описывается в обзоре со ссылкой на цель направления.');
     if (node.form === 'file' && (node.kind !== 'unit' || node.kit.length || node.strategicFiles.length)) issue(`Для управленческой панели и стратегических файлов выберите форму папки: ${node.name}.`);
+    if (node.kind === 'employee' && (node.parentId === 'root' || node.form !== 'folder' || node.kit.length || node.strategicFiles.length)) issue('Папка сотрудника живёт в 02_team/ объекта, где ведут работу с командой; профиль — её точка входа.');
+    if (parent?.kind === 'employee') issue('В папке сотрудника нет вложенных объектов управления.');
+    if (node.kind === 'ceo' && !legacy) issue('Узла CEO в 00_ceo/ больше нет: профиль CEO — папка сотрудника в 02_team/ компании.');
     if (node.kind === 'ceo' && (node.slug !== '00_ceo' || node.parentId !== 'root' || node.kit.length || node.strategicFiles.length)) issue('Личный контекст CEO использует свой шаблон в 00_ceo/.');
+    if (node.slug === '00_ceo' && node.kind !== 'ceo') issue(`Недопустимое имя папки: ${node.slug}.`);
     if (node.kind === 'client' && parent?.kind !== 'clients') issue('Клиент размещается в портфеле клиентов.');
-    if (node.form === 'folder' && !['ceo', 'clients'].includes(node.kind) && !node.kit.includes('overview')) issue(`Для папки нужен обзор: ${node.name}.`);
+    if (node.form === 'folder' && !['employee', 'ceo', 'clients'].includes(node.kind) && !node.kit.includes('overview')) issue(`Для папки нужен обзор: ${node.name}.`);
     const seen = new Set([node.id]); let cursor = parent;
     while (cursor) {
       if (seen.has(cursor.id)) { issue('Вложенность содержит цикл.'); break; }
@@ -52,7 +65,9 @@ export const semanticScaffoldConfigSchema = z.object({
     const id = extra.ownerId + '/' + extra.kind;
     if (extraKeys.has(id)) issue('Блок уже добавлен в объект.');
     extraKeys.add(id);
-    if (extra.kind === 'private' && !extra.slug) issue('Для приватной папки нужно имя владельца.');
+    if (extra.kind === 'private' && owner?.kind !== 'employee' && !legacy) issue('Личное живёт только в _private/ папки сотрудника в 02_team/.');
+    if (extra.kind === 'private' && owner?.kind !== 'employee' && legacy && !extra.slug) issue('Для приватной папки нужно имя владельца.');
+    if (extra.kind !== 'private' && owner?.kind === 'employee') issue('В папке сотрудника только профиль, карта и личное.');
     if (extra.kind === 'strategic' && owner?.kind === 'project') issue('Цель проекта и вклад в цель владельца живут в обзоре.');
   }
 });
@@ -96,7 +111,7 @@ export function planScaffold(input: unknown): ScaffoldPlan {
     if (paths.has(node.id)) return paths.get(node.id)!;
     const parent = nodes.get(node.parentId);
     const base = node.parentId === 'root' ? '' : node.parentId === 'company' ? '01_company/' : location(parent!) + '/';
-    const path = base + (node.kind === 'project' ? 'projects/' : '') + node.slug;
+    const path = base + (node.kind === 'project' ? 'projects/' : node.kind === 'employee' ? '02_team/' : '') + node.slug;
     paths.set(node.id, path); return path;
   }
   for (const node of config.nodes) {
@@ -106,6 +121,11 @@ export function planScaffold(input: unknown): ScaffoldPlan {
       if (!files.has(container)) add(container, 'templates/aspects/projects/README.md', nodes.get(node.parentId)?.name ?? config.companyName, 'Карта проектов владельца');
     }
     if (node.form === 'file') { add(path + '.md', null, node.name, 'Краткий контекст направления по общей спецификации; ответственный, состояние, ссылки'); continue; }
+    if (node.kind === 'employee') {
+      add(path + '/README.md', 'templates/nodes/employee/README.md', node.name, 'Карта папки сотрудника');
+      add(path + '/01_profile.md', 'templates/aspects/02_team/employee.md', node.name, 'Профиль: роль и зона ответственности, в шапке role и units');
+      continue;
+    }
     if (['ceo', 'product', 'clients', 'client'].includes(node.kind)) {
       const prefix = `templates/nodes/${node.kind === 'client' ? 'clients/client-name' : node.kind}/`;
       for (const file of manifest.templates.filter(file => file.path.startsWith(prefix) && !file.path.slice(prefix.length).includes('/'))) {
@@ -137,7 +157,8 @@ export function planScaffold(input: unknown): ScaffoldPlan {
     else if (extra.kind === 'inbox' || extra.kind === 'archive') {
       const folder = extra.kind === 'inbox' ? '_inbox' : 'zz_archive';
       addIfMissing(`${path}/${folder}/README.md`, `templates/infrastructure/${folder}/README.md`, 'Служебная папка');
-    } else if (extra.kind === 'private') explicitDirectories.push({ path: `${path}/_private/${extra.slug}`, subject, purpose: 'Приватная папка участника; права хранилища настроить до размещения данных' });
+    } else if (extra.kind === 'private' && owner?.kind !== 'employee') explicitDirectories.push({ path: `${path}/_private/${extra.slug}`, subject, purpose: 'Приватная папка участника (каталог до 4.4.0)' });
+    else if (extra.kind === 'private') explicitDirectories.push({ path: `${path}/_private`, subject, purpose: 'Личное сотрудника: видит только он; права хранилища настроить до размещения данных' });
     else explicitDirectories.push({ path: `${path}/${extra.kind}`, subject, purpose: 'Рабочие материалы клиента' });
   }
   const directories = new Map(explicitDirectories.map(item => [item.path, item]));
@@ -152,7 +173,7 @@ export function planScaffold(input: unknown): ScaffoldPlan {
       'Подготовить содержимое файлов: названия, миссии, ответственные, причины размещения, ссылки и карты README. Не копировать каталог шаблонов в пространство.',
       'В непустом корне подготовить отдельный diff; подтверждение структуры не разрешает замену существующего текста, удаление или правку final и правил владельца.',
       'Применить согласованный пакет через space-scaffold, проверить файлы, ссылки и состав. Только затем записать достоверную версию каркаса и подтверждённую привязку реальной компании; не закрывать другие этапы онбординга по подтверждению Screen.',
-      'Интейки стратегии, целей и профиля руководителя, содержательное наполнение и синхронизация пространства выполняются следующими треками; их готовность не требуется для создания каркаса.'] };
+      'Интейки стратегии, целей и профилей людей, содержательное наполнение и синхронизация пространства выполняются следующими треками; их готовность не требуется для создания каркаса.'] };
 }
 export const initialScaffold: ScaffoldConfig = { schemaVersion: 1, catalogVersion: manifest.version, canonSnapshot: manifest.canonSnapshot,
   companyName: 'Учебная компания', companyKit: [], nodes: [

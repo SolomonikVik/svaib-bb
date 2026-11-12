@@ -2,6 +2,14 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
+## Version 0.7.0
+
+При настройке Kimi можно выбрать Claude Code или Pi. Путь Pi использует существующие штатную установку и профиль, сохраняет рабочие подключения и других провайдеров и позволяет установить недостающий Pi через BB. Плановый перезапуск BB не требуется. По явному выбору доступен отдельный управляемый запасной путь со своей средой исполнения и требованиями к перезапуску.
+
+Подключение svaib продолжается в текущем разговоре, если в нём доступны инструменты MCP. Штатная смена папки BB сохраняет поручение и проверенную компанию после проверки выбранной папки. Существующие аккаунты, выбор модели и разрешения сохраняются. В комплект входит Harness 0.13.0 с обновлёнными контекстом профиля, структурой сотрудников и справками подключения.
+
+Новый маршрут проверен в изолированных средах исполнения с тестовыми учётными данными. Настоящий ответ Kimi в полном новом процессе настройки и клиентские Windows/macOS остаются отдельными проверками приёмки.
+
 ## Version 0.6.2
 
 Kimi setup now allows up to 15 minutes for npm installation, reports download and installation progress, and verifies Node, the adapter and Claude Code before activating a new runtime. Interrupted or damaged owned runtimes can be reinstalled without replacing the API key. Installation is staged with rollback and serialized across workers. Each Node download has a five-minute limit.
@@ -64,22 +72,22 @@ This is an early access release. The local test build was manually checked in th
 
 ## Installation
 
-Paste `npm:bb-plugin-svaib-workplace` into BB's **Install from source** dialog.
-You do not install Git or build tools manually. The package includes a prebuilt
-frontend and backend. It targets BB0.48.1 / SDK0.6.104 so that runtime can use
-the backend directly. A BB release with a different SDK may automatically
-rebuild the backend using BB's own toolchain.
-The complete flow on an Intel Mac with macOS11.7.11 remains unverified; npm alone
-does not guarantee a fix for the reported `_SecTrustCopyCertificateChain` error.
+Вставьте `npm:bb-plugin-svaib-workplace` в диалог **Install from source** в BB.
+Вручную устанавливать Git или инструменты сборки не нужно. Пакет включает готовые
+интерфейс и серверный код. Он рассчитан на BB 0.48.1 / SDK 0.6.104, поэтому эта среда исполнения
+может использовать серверный код напрямую. Выпуск BB с другим SDK может автоматически
+пересобрать серверный код своими инструментами.
+Полный путь на Intel Mac с macOS11.7.11 не проверен; сама по себе npm-установка
+не гарантирует исправления сообщённой ошибки `_SecTrustCopyCertificateChain`.
 
-Install `https://github.com/SolomonikVik/svaib-bb` in BB Settings → Installed plugins → Install from source. The package is at the repository root. BB uses its bundled npm and toolchain; users do not install npm or unpack an archive. The ordinary Git URL tracks the default branch; immutable semantic-version tags are available for explicit range tracking.
+Установите `https://github.com/SolomonikVik/svaib-bb` через BB Settings → Installed plugins → Install from source. Пакет находится в корне репозитория. BB использует встроенные npm и инструменты сборки; пользователю не нужно устанавливать npm или распаковывать архив. Обычный Git URL отслеживает ветку по умолчанию; неизменяемые теги семантических версий позволяют явно отслеживать диапазон.
 
-For an agent-managed install with an explicit compatible release range:
+Для установки агентом с явно заданным совместимым диапазоном выпусков:
 
 ```sh
 bb plugin install git:https://github.com/SolomonikVik/svaib-bb.git@^0.5.5
 ```
 
-The repository contains the BB plugin and one shared methodology package for Codex and Claude Code. Its hooks detect their native host. The connection assistant preserves the actual provider and profile, validates the bundled package and prepares that provider's stable local marketplace, then uses the CLI's normal plugin installation. Python 3 is required by the methodology handlers and managed sign-in. The managed Codex sign-in path currently requires Codex CLI 0.166.0. User credentials remain in the normal model and svaib sign-in flows.
+Репозиторий содержит BB-плагин и один общий методологический пакет для Codex и Claude Code. Его хуки определяют штатную среду агента. Помощник подключения сохраняет фактические провайдер и профиль, проверяет включённый пакет и готовит постоянный локальный путь маркетплейса для этого провайдера, затем использует штатную установку плагина через CLI. Для методологических обработчиков и управляемого входа нужен Python 3. Управляемый вход Codex сейчас требует Codex CLI 0.166.0. Учётные данные пользователя остаются в штатных процессах входа в модель и svaib.
 
-BB plugin updates deliver new bundled files. Updating the native methodology installation is a separate checked operation in the same profile; it is not an atomic part of the BB update. The connection assistant preserves working sign-ins and asks before replacing a marketplace from a different source.
+Обновления BB-плагина доставляют новые файлы комплекта. Обновление штатной методологической установки — отдельная проверяемая операция в том же профиле; оно не является атомарной частью обновления BB. Помощник подключения сохраняет рабочие входы и спрашивает перед заменой маркетплейса из другого источника.

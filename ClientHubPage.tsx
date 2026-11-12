@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MouseEvent } from 'react';
-import { Markdown, UrlLink, useRpc } from '@get-bb/plugin-sdk/app';
+import { Markdown, UrlLink, experimental_FileLink as FileLink, useRpc } from '@get-bb/plugin-sdk/app';
 import type { rpcContract } from './server';
 import type { Action, SourceDocument, Workspace } from './types';
 import { presentationMarkdown, registeredSourceForHref } from './document-presentation';
@@ -105,6 +105,9 @@ export default function ClientHubPage({ workspace, onSource, onAction, guideOpen
       const content = <><ScenarioIcon kind={card.icon} />{(action || source || card.url) && <Arrow />}<h2>{card.title}</h2><p>{card.description}</p></>;
       const className = `svb-client-scenario svb-client-scenario--${card.icon}`;
       if (card.url) return <UrlLink key={card.id} className={className} href={card.url}>{content}</UrlLink>;
+      if (source && !/\.(md|markdown)$/i.test(source.path) && workspace.fileContext) {
+        return <FileLink key={card.id} className={className} target={{ kind: 'host', hostId: workspace.fileContext.hostId, path: source.path }}>{content}</FileLink>;
+      }
       return action || source ? <button key={card.id} className={className} type="button" disabled={action?.available === false} title={action?.available === false ? action.unavailableReason : undefined} onClick={() => action ? onAction(action) : source && onSource(source.id)}>{content}</button>
         : <article key={card.id} className={className}>{content}</article>;
     })}</section>}

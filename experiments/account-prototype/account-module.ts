@@ -6,7 +6,7 @@ import { SvaibApi } from './api';
 import { OAuthConnection, productionOAuth, type OAuthEndpoints, type SessionStore } from './oauth';
 import { SvaibMcp } from './mcp';
 import type { Fetcher } from './http';
-import { connectionConfiguration, connectionMetadataSchema, connectionThreadSchema, BEGIN_TOOL, FRESH_TOOL, WAIT_TOOL, START_TOOL } from './connection';
+import { connectionConfiguration, connectionMetadataSchema, connectionThreadSchema, type ConnectionBinding, BEGIN_TOOL, FRESH_TOOL, WAIT_TOOL, START_TOOL } from './connection';
 import { ConnectFlow, flowSchema, startFlowSchema } from './connect-flow';
 import { browserContract } from './browser-contract';
 import { continuationInputSchema } from './continuation';
@@ -44,6 +44,7 @@ export interface AccountModuleOptions {
   apiBase?: string;
   fetcher?: Fetcher;
   registerConfigure?: boolean;
+  validateWorkspaceMove?: (threadId: string, from: ConnectionBinding, to: ConnectionBinding, companyId?: string) => Promise<string | undefined>;
 }
 export type AccountModuleApi = Pick<BbPluginApi,
   'pluginId' | 'realtime' | 'onDispose' | 'hosts' | 'sdk' | 'server' | 'storage' | 'agents' | 'events' | 'rpc' | 'ui'>;
@@ -67,7 +68,7 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
   flow = new ConnectFlow({ sdk: bb.sdk, kv: bb.storage.kv, pluginId: bb.pluginId,
     account: () => account.view(), begin: () => oauth.begin(), cancel: () => oauth.cancel(), restartPending: epoch => oauth.restartPending(epoch), epoch: () => oauth.epoch, changed,
     open: async (url, hostId, signal) => { await browser.call('openLogin', { url }, { hostId, signal }); },
-    prepareHooks: ctx => reviewHooks(ctx),
+    prepareHooks: ctx => reviewHooks(ctx), validateWorkspaceMove: options.validateWorkspaceMove,
     identity: account.workplaceIdentity.bind(account),
   });
   await flow.load();
@@ -79,16 +80,16 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
     bb.agents.registerTool({ name: BEGIN_TOOL, description: 'Начинает или проверяет вход кабинета svaib. Не проверяет вход партнёра и не возвращает токены или OAuth-ссылки.',
       parameters: z.object({ continuation: continuationInputSchema.optional(), reopenBrowser: z.boolean().optional().describe('Только по просьбе пользователя повторно открыть закрытую вкладку.') }).strict(),
       execute: async ({ reopenBrowser, continuation }, ctx) => JSON.stringify(await connection.prepareCabinet(ctx, reopenBrowser, continuation)) });
-  bb.agents.registerTool({ name: START_TOOL, description: 'По явному поручению подключить svaib передаёт ограниченное продолжение из текущего BB-разговора и открывает подключение. Сохрани исходный объём поручения; не передавай credentials или полный transcript.',
+  bb.agents.registerTool({ name: START_TOOL, description: 'По явному поручению подключить svaib сохраняет ограниченное поручение и начинает настройку в текущем разговоре. Новый разговор сам по себе не нужен. Не передавай credentials или полный transcript.',
     parameters: continuationInputSchema, execute: async (continuation, ctx) => {
       const result = await connection.start({ projectId: ctx.projectId, threadId: ctx.threadId, continuation });
       if (result.threadId) await bb.sdk.threads.open({ threadId: result.threadId, file: null });
       return JSON.stringify(result);
     } });
-  bb.agents.registerTool({ name: FRESH_TOOL, description: 'После установки и входа MCP запускает свежую проверку в той же среде автоматически. Не выполняет повторный OAuth.', parameters: z.object({ continuation: continuationInputSchema.optional() }).strict(),
+  bb.agents.registerTool({ name: FRESH_TOOL, description: 'Только если после установки или входа MCP-инструменты не появились в текущей сессии, открывает один новый разговор в той же среде. При работающем whoami оставайся здесь. Не выполняет OAuth.', parameters: z.object({ continuation: continuationInputSchema.optional() }).strict(),
     execute: async ({ continuation }, ctx) => JSON.stringify(await connection.freshVerification(ctx, continuation)),
   });
-  bb.agents.registerTool({ name: WAIT_TOOL, description: 'Ожидает завершение OAuth-процесса в указанном терминале без чтения вывода, затем автоматически запускает свежую проверку MCP.', parameters: z.object({ terminalId: z.string().regex(/^term_[a-z0-9]+$/), continuation: continuationInputSchema.optional() }).strict(),
+  bb.agents.registerTool({ name: WAIT_TOOL, description: 'Ожидает завершение OAuth-процесса без чтения вывода. После завершения проверь MCP здесь; новый разговор автоматически не создаётся.', parameters: z.object({ terminalId: z.string().regex(/^term_[a-z0-9]+$/), continuation: continuationInputSchema.optional() }).strict(),
     execute: async ({ terminalId, continuation }, ctx) => JSON.stringify(await connection.waitForMcp(terminalId, ctx, continuation)),
   });
   bb.agents.registerTool({ name: NATIVE_TOOL, description: 'Открывает управляемый штатный вход Codex в проверенном локальном профиле; backend сам создаёт один принадлежащий подключению терминал. Возвращает только terminalId. OAuth URL и токены в модель не попадают.',
@@ -130,7 +131,7 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
     connectionThread: async ({ threadId }) => {
       const thread = await bb.sdk.threads.get({ threadId });
       const metadata = await bb.sdk.threads.getPluginMetadata({ threadId });
-      if (thread.originPluginId !== bb.pluginId || thread.originKind !== null || !connectionMetadataSchema.safeParse(metadata).success || !thread.environmentId || thread.deletedAt) {
+      if (!connectionMetadataSchema.safeParse(metadata).success || !thread.environmentId || thread.deletedAt) {
         throw new Error('Этот разговор не относится к настройке подключения.');
       }
       const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId });

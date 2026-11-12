@@ -284,7 +284,7 @@ export default definePluginApp(app => {
   app.experimental_icons.register({ name: "svaib-workplace/brand", component: ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true"><text x="2" y="20" fontFamily="Montserrat, Inter, sans-serif" fontSize="25" fontWeight="800" fill="var(--svb-teal, #00B4A6)">s</text><circle cx="21" cy="19.5" r="2" fill="#FF4D8D"/></svg> });
   app.experimental_icons.register({ name: "svaib-workplace/compass", component: ({className}) => <Glyph name="Compass" className={className} /> });
   app.slots.navPanel({ id: "workplace", path: "workplace", title: "svaib", icon: "svaib-workplace/brand", component: WorkplaceRouter });
-  app.slots.settingsSection({ id: 'kimi-setup', title: 'Kimi через Claude Code', component: () => <KimiSetup settings /> });
+  app.slots.settingsSection({ id: 'kimi-setup', title: 'Kimi: Claude Code или Pi', component: () => <KimiSetup settings /> });
   app.slots.experimental_tab({ ...contextTab, title: "Контекст", icon: "svaib-workplace/compass", component: FixedContextPanel, layout: "flush" });
   app.slots.homepageSection({ id: "workplace-home", title: "svaib · рабочее место", component: HomeSection });
   app.slots.experimental_tab({ context: { kind: "thread" }, availability: "action", id: "svaib-context", title: "Контекст svaib", icon: "svaib-workplace/compass", component: () => <ContextPanel />, layout: "flush" });

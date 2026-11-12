@@ -4,8 +4,8 @@
 .svb-kimi p { font-size: 14px; line-height: 1.6; margin: 10px 0 16px; }
 .svb-kimi form { display: grid; gap: 8px; }
 .svb-kimi label { display: grid; gap: 7px; margin-top: 12px; font-size: 14px; }
-.svb-kimi input, .svb-kimi textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--svb-border, #9eaaa266); border-radius: 8px; padding: 10px 12px; color: inherit; background: transparent; }
-.svb-kimi input:focus-visible, .svb-kimi textarea:focus-visible { outline: 2px solid var(--svb-teal, #00b4a6); outline-offset: 2px; }
+.svb-kimi input, .svb-kimi textarea, .svb-kimi select { width: 100%; box-sizing: border-box; border: 1px solid var(--svb-border, #9eaaa266); border-radius: 8px; padding: 10px 12px; color: inherit; background: transparent; }
+.svb-kimi input:focus-visible, .svb-kimi textarea:focus-visible, .svb-kimi select:focus-visible { outline: 2px solid var(--svb-teal, #00b4a6); outline-offset: 2px; }
 .svb-kimi textarea { font: 12px/1.5 monospace; resize: vertical; margin: 12px 0; }
 .svb-kimi .svb-kimi-note { color: var(--svb-muted, #78877f); font-size: 12px; }
 .svb-kimi-link { display: inline-block; color: var(--svb-teal, #00b4a6); margin: 0 16px 12px 0; }

@@ -54,6 +54,7 @@ type Dependencies = {
   identity(signal?: AbortSignal): Promise<WorkplaceIdentity>;
   open: (url: string, hostId: string, signal: AbortSignal) => Promise<void>;
   prepareHooks?: (ctx: PluginAgentToolContext) => Promise<{ state: 'trusted'; changed: boolean } | { state: 'declined' }>;
+  validateWorkspaceMove?: (threadId: string, from: Binding, to: Binding, companyId?: string) => Promise<string | undefined>;
   changed: () => void;
 };
 /** One explicit user action owns installation, native verification and cabinet OAuth. */
@@ -154,8 +155,12 @@ export class ConnectFlow {
    * Read the thread again after the environment await, so that read cannot hide
    * a concurrent thread rebind behind an earlier thread snapshot. */
   private async checkPairingBinding(owner: Pick<Pairing, 'threadId' | 'binding'>, signal?: AbortSignal) {
+    const raw = await this.d.sdk.threads.getPluginMetadata({ threadId: owner.threadId }); signal?.throwIfAborted();
+    const metadata = connectionMetadataSchema.safeParse(raw);
+    const adopted = owner.threadId === this.state.threadId && metadata.success && metadata.data.inPlace === true &&
+      metadata.data.continuation?.sourceThreadId === owner.threadId && metadata.data.runId === this.state.runId;
     const matches = (thread: Awaited<ReturnType<PluginBbSdk['threads']['get']>>) =>
-      thread?.id === owner.threadId && !thread.deletedAt && thread.originPluginId === this.d.pluginId &&
+      thread?.id === owner.threadId && !thread.deletedAt && (thread.originPluginId === this.d.pluginId || adopted) &&
       thread.projectId === owner.binding.projectId && thread.environmentId === owner.binding.environmentId &&
       thread.providerId === owner.binding.providerId;
     const first = await this.d.sdk.threads.get({ threadId: owner.threadId }); signal?.throwIfAborted();
@@ -247,6 +252,18 @@ export class ConnectFlow {
     this.startingSource = input.threadId;
     this.starting = (async () => {
       const current = await this.view();
+      // start() transfers an ordinary conversation into setup. Calling it from
+      // the destination must never hand the agent a link back to itself.
+      if (input.threadId && input.threadId === current.threadId && !input.restartCabinet &&
+          ['setup', 'verify', 'cabinet', 'error'].includes(current.stage)) {
+        const metadata = connectionMetadataSchema.safeParse(await this.d.sdk.threads.getPluginMetadata({ threadId: input.threadId }));
+        if (metadata.success && metadata.data.inPlace && metadata.data.binding && metadata.data.runId === current.runId) {
+          const resumed = await this.resumeInPlace(current, metadata.data, input);
+          if (resumed.binding?.environmentId !== current.binding?.environmentId || metadata.data.continuation?.sourceThreadId === input.threadId)
+            return resumed;
+        }
+        throw new Error('Ты уже в разговоре подключения. Не вызывай svaib_connect_start или RPC connect повторно и не отправляй пользователя в этот же разговор. Проверь native MCP whoami здесь; при недоступности разбери текущую ошибку запуска или входа по скиллу svaib-workplace-connect. Сохранённые входы не менялись.');
+      }
       if (input.continuation && current.threadId) {
         const existing = connectionMetadataSchema.parse(await this.d.sdk.threads.getPluginMetadata({ threadId: current.threadId }));
         if (existing.continuation?.sourceThreadId !== input.threadId || existing.continuation.sourceProjectId !== input.projectId) {
@@ -288,7 +305,8 @@ export class ConnectFlow {
             await this.caller({ threadId } as PluginAgentToolContext, true); check();
             if (metadata.data.phase !== 'setup') throw new Error(NATIVE_TERMINAL_MISSING);
             await this.save({ stage: 'setup', retryable: false, message: 'Проверяю сохранённый доступ партнёра…' }, valid); check();
-            await this.freshVerification({ threadId, projectId: binding.projectId, signal: this.disposed.signal } as PluginAgentToolContext, undefined, true);
+            await this.d.sdk.threads.send({ threadId, mode: 'auto', input: instructionInput(
+              'Прежний терминал недоступен. Проверь сохранённый native MCP whoami здесь без нового OAuth. Только если инструмента нет в текущей сессии, используй один svaib_connect_verify. Если инструмент отвечает ошибкой, диагностируй её здесь.') }); check();
             return this.view();
           }
         }
@@ -353,6 +371,43 @@ export class ConnectFlow {
       return this.startNew(input);
     })().finally(() => { this.starting = null; this.startingSource = null; });
     return this.starting;
+  }
+
+  private async resumeInPlace(current: ConnectFlowView, metadata: z.infer<typeof connectionMetadataSchema>, input: z.infer<typeof startFlowSchema>) {
+    const from = current.binding;
+    if (!from || !current.threadId || !metadata.binding || JSON.stringify(metadata.binding) !== JSON.stringify(from))
+      throw new Error('Привязка подключения изменилась. Проверь текущее рабочее место.');
+    if (input.projectId && input.projectId !== from.projectId) throw new Error('Рабочее место подключения изменилось.');
+    if (metadata.continuation) checkContinuation(metadata.continuation, from.projectId, from.environmentId);
+    const thread = await this.d.sdk.threads.get({ threadId: current.threadId });
+    const env = thread.environmentId ? await this.d.sdk.environments.get({ environmentId: thread.environmentId }) : null;
+    if (!env || env.id !== thread.environmentId || env.status !== 'ready' || thread.deletedAt ||
+        thread.projectId !== from.projectId || thread.providerId !== from.providerId || env.hostId !== from.hostId ||
+        (thread.originPluginId !== this.d.pluginId && metadata.continuation?.sourceThreadId !== thread.id))
+      throw new Error('Рабочее место подключения изменилось.');
+    if (env.id === from.environmentId) return current;
+    if (!this.d.validateWorkspaceMove) throw new Error('Не удалось проверить выбранную папку. Подключение сохранено.');
+    const epoch = this.d.epoch(), runId = current.runId;
+    const valid = () => this.state.runId === runId && this.state.threadId === thread.id && this.d.epoch() === epoch && !this.disposed.signal.aborted;
+    const native = await this.native.status({ runId, threadId: thread.id, binding: from });
+    if (native?.running) throw new Error('Сначала заверши вход в уже открытом браузере, затем продолжи в выбранной папке. Второй вход не запускался.');
+    const to = { ...from, environmentId: env.id };
+    const companyId = await this.d.validateWorkspaceMove(thread.id, from, to, metadata.workspaceCompanyId);
+    const after = await this.d.sdk.threads.get({ threadId: thread.id });
+    const afterEnv = await this.d.sdk.environments.get({ environmentId: env.id });
+    const latest = connectionMetadataSchema.safeParse(await this.d.sdk.threads.getPluginMetadata({ threadId: thread.id }));
+    if (!valid() || after.deletedAt || after.environmentId !== to.environmentId || after.projectId !== to.projectId ||
+        after.providerId !== to.providerId || afterEnv.id !== to.environmentId || afterEnv.hostId !== to.hostId ||
+        afterEnv.status !== 'ready' || afterEnv.path !== env.path || !latest.success || JSON.stringify(latest.data) !== JSON.stringify(metadata))
+      throw new Error('Выбранная папка или подключение изменились во время проверки. Повтори продолжение здесь.');
+    const continuation = metadata.continuation ? { ...metadata.continuation, sourceEnvironmentId: env.id,
+      data: { ...metadata.continuation.data, ...(env.path ? { folder: env.path } : {}) } } : undefined;
+    await this.d.sdk.threads.updatePluginMetadata({ threadId: thread.id, set: { binding: to,
+      ...(continuation ? { continuation } : {}), ...(companyId ? { workspaceCompanyId: companyId } : {}),
+      ...(native?.unavailable ? { verifyExistingOnly: true } : {}) } });
+    if (!valid()) throw new Error('Подключение изменилось.');
+    await this.save({ binding: to, message: 'Привязка обновлена: продолжаю в выбранной папке без нового входа.' }, valid);
+    return this.view();
   }
 
   async startNative(input: z.infer<typeof nativeStartSchema>, ctx: PluginAgentToolContext) {
@@ -427,20 +482,29 @@ export class ConnectFlow {
     const runId = randomUUID();
     await this.savePairing(null);
     await this.save({ ...empty(), verification: undefined, runId, stage: 'setup', message: 'Подключаю svaib…' });
+    if (input.threadId && sourceEnvironmentId && providerId) {
+      // A normal conversation already has the connection tools in its immutable
+      // inventory. Record this explicit assignment here; no helper chat is needed.
+      const binding = connectionBindingSchema.parse({ projectId, environmentId: sourceEnvironmentId,
+        hostId: primaryHostId, providerId });
+      await sdk.threads.updatePluginMetadata({ threadId: input.threadId, set: {
+        schema: 1, task: 'svaib-connect', phase: 'setup', unified: true, inPlace: true, runId, continuation,
+        binding, targetHostId: primaryHostId, ...(verifyExistingAccess ? { verifyExistingOnly: true } : {}),
+      } });
+      await this.save({ threadId: input.threadId, binding, message: 'Продолжаю настройку в этом разговоре.' });
+      return this.view();
+    }
     let createdThreadId: string | undefined;
     try {
       const initialPrompt = verifyExistingAccess
-        ? 'Прежний процесс входа недоступен, его состояние неизвестно. Ничего не устанавливай, не запускай никакой OAuth и не вызывай инструменты: автоматическая проверка сохранённого доступа откроется в следующем разговоре.'
+        ? 'Прежний процесс входа недоступен, его состояние неизвестно. Ничего не устанавливай и не запускай OAuth. Проверь native MCP whoami здесь; только если инструмент недоступен текущей сессии, используй один svaib_connect_verify.' + continuationPrompt(continuation)
         : 'Подключи svaib целиком: партнёра и кабинет. Выполни техническую настройку сам; мне оставь подтверждение входа в браузере.' +
           (continuation.captured && continuation.data.scope === 'onboarding' ? ` ${onboardingCommunication}` : '') +
           continuationPrompt(continuation);
       const thread = await sdk.threads.spawn({ projectId, environment, ...execution, ...(providerId ? { providerId } : {}),
         title: 'Подключение svaib', input: instructionInput(initialPrompt),
-        // This recovery bootstrap has no user interaction; its successor is
-        // the visible conversation. Keep the record for diagnostics without
-        // cluttering the user's thread list or deleting a conversation.
-        ...(verifyExistingAccess ? { visibility: 'hidden' as const } : {}),
-        pluginMetadata: { schema: 1, task: 'svaib-connect', phase: 'setup', unified: true, runId, continuation, targetHostId: primaryHostId },
+        pluginMetadata: { schema: 1, task: 'svaib-connect', phase: 'setup', unified: true, inPlace: true, runId, continuation, targetHostId: primaryHostId,
+          ...(verifyExistingAccess ? { verifyExistingOnly: true } : {}) },
       });
       createdThreadId = thread.id;
       await this.save({ threadId: thread.id });
@@ -449,9 +513,7 @@ export class ConnectFlow {
       const binding = connectionBindingSchema.parse({ projectId: current.projectId, environmentId: env.id, hostId: env.hostId, providerId: current.providerId });
       if (binding.hostId !== primaryHostId) throw new Error('BB выбрал другое рабочее место. Подключение остановлено.');
       await this.save({ threadId: thread.id, binding });
-      if (verifyExistingAccess) {
-        await this.freshVerification({ threadId: thread.id, projectId: binding.projectId, signal: this.disposed.signal } as PluginAgentToolContext, undefined, true);
-      }
+      await sdk.threads.updatePluginMetadata({ threadId: thread.id, set: { binding } });
       return this.view();
     } catch {
       if (this.state.runId !== runId) return this.view();
@@ -490,7 +552,11 @@ export class ConnectFlow {
     const thread = await this.d.sdk.threads.get({ threadId: ctx.threadId });
     const env = thread.environmentId ? await this.d.sdk.environments.get({ environmentId: thread.environmentId }) : null;
     const b = this.state.binding;
-    if (thread.originPluginId !== this.d.pluginId || thread.projectId !== b.projectId || thread.environmentId !== b.environmentId || thread.providerId !== b.providerId || env?.hostId !== b.hostId) {
+    const raw = await this.d.sdk.threads.getPluginMetadata({ threadId: ctx.threadId });
+    const metadata = connectionMetadataSchema.safeParse(raw);
+    if (!metadata.success || metadata.data.runId !== this.state.runId ||
+        (thread.originPluginId !== this.d.pluginId && !(metadata.data.inPlace && metadata.data.continuation?.sourceThreadId === thread.id)) ||
+        thread.projectId !== b.projectId || thread.environmentId !== b.environmentId || thread.providerId !== b.providerId || env?.hostId !== b.hostId || thread.deletedAt) {
       throw new Error('Разговор или рабочее место подключения изменились. Подключение остановлено.');
     }
     return { thread, binding: b };
@@ -542,8 +608,9 @@ export class ConnectFlow {
       ...(defaults ? { model: defaults.model, permissionMode: defaults.permissionMode, reasoningLevel: defaults.reasoningLevel, serviceTier: defaults.serviceTier } : {}),
       title: 'Партнёр svaib', input: instructionInput(('Продолжи проверку svaib: вызови native MCP whoami. Ничего не переустанавливай и не запускай повторный MCP OAuth.') + continuationPrompt(continuation, source.id) +
         (continuation?.captured && continuation.data.scope === 'onboarding' ? ` ${onboardingCommunication}` : '')),
-      pluginMetadata: { schema: 1, task: 'svaib-connect', phase: 'verify', binding, unified: true, runId, ...(continuation ? { continuation } : {}),
-        previousThreadId: source.id, targetHostId: binding.hostId },
+      pluginMetadata: { schema: 1, task: 'svaib-connect', phase: 'verify', binding, unified: true, inPlace: true, runId, ...(continuation ? { continuation } : {}),
+        previousThreadId: source.id, targetHostId: binding.hostId, ...(metadata.verifyExistingOnly ? { verifyExistingOnly: true } : {}),
+        ...(metadata.workspaceCompanyId ? { workspaceCompanyId: metadata.workspaceCompanyId } : {}) },
     });
     // spawn starts the turn immediately and can outlive an RPC cancellation or
     // a change to the source chat. Fence again before recording any handoff.
@@ -624,7 +691,19 @@ export class ConnectFlow {
           await this.save({ stage: 'error', retryable: !technicalFailure, message }, current);
           throw new Error(message);
         }
-        return this.freshVerification(ctx, updates);
+        const raw = await this.d.sdk.threads.getPluginMetadata({ threadId: ctx.threadId });
+        const metadata = connectionMetadataSchema.parse(raw);
+        if (!current() || metadata.runId !== runId) throw new Error('Подключение изменилось.');
+        if (updates) {
+          if (!metadata.continuation) throw new Error('Нет исходной передачи.');
+          await this.d.sdk.threads.updatePluginMetadata({ threadId: ctx.threadId, set: {
+            continuation: mergeContinuation(metadata.continuation, updates),
+          } });
+        }
+        this.nativeChecking = { runId, threadId: ctx.threadId };
+        await this.save({ stage: 'setup', retryable: false, message: 'Вход завершён. Проверяю MCP в текущем разговоре.' }, current);
+        return { threadId: ctx.threadId, pending: false as const, handedOff: false as const,
+          message: 'Процесс входа завершён. Проверь native MCP whoami здесь. Если инструмент доступен, продолжай здесь; только если его нет в текущей сессии, вызови svaib_connect_verify для одного нового разговора. Ошибка доступа требует диагностики, а не нового OAuth.' };
       }
       await new Promise<void>((resolve, reject) => {
         const abort = () => { clearTimeout(timer); reject(new Error('cancelled')); };

@@ -82,7 +82,7 @@ export async function buildOverview(config: WorkplaceConfig): Promise<Overview> 
       ...(!item.companyId && item.metricsDashboard ? { metricsDashboard: item.metricsDashboard } : {}),
       ...(item.aspects ? { aspects: item.aspects } : {}),
       ...(item.personal ? { personal: item.personal } : {}),
-      ...(item.clientHub ? { clientHub: item.clientHub } : {}),
+      ...(item.clientHub ? { clientHub: item.clientHub, fileContext: { hostId: item.hostId, environmentId: item.environmentId, rootPath: item.documentRoot ?? item.root } } : {}),
       ...(item.linkHub ? { linkHub: item.linkHub, fileContext: { hostId: item.hostId, environmentId: item.environmentId, rootPath: item.documentRoot ?? item.root } } : {}),
     };
   }));
@@ -187,7 +187,9 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     return { ...config, workspaces };
   }
   // Each module uses the root plugin identity and production credential store.
-  const account = await registerAccountModule(bb, { registerConfigure: false, sessionStore: {
+  let workContext: ReturnType<typeof createScreenPluginContext>;
+  const account = await registerAccountModule(bb, { registerConfigure: false,
+    validateWorkspaceMove: (...args) => workContext.validateWorkspaceMove(...args), sessionStore: {
     read: async () => (await settings.get()).productionOAuthSession ?? '',
     write: async value => { await settings.experimental_set({ productionOAuthSession: value || null }); },
   } });
@@ -207,7 +209,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     },
   });
   const screen = registerScreenModule(bb, { account, validatePersistentRootForTesting });
-  const workContext = createScreenPluginContext({ sdk: bb.sdk, kv: bb.storage.kv, account, validatePersistentRootForTesting });
+  workContext = createScreenPluginContext({ sdk: bb.sdk, kv: bb.storage.kv, account, validatePersistentRootForTesting });
   const contextTool = 'svaib_workspace_context';
   bb.agents.registerTool({ name: contextTool,
     description: 'Проверяет текущий доступ, компанию и рабочую папку действия, выбранного во вкладке svaib, и возвращает его инструкцию.',
@@ -260,10 +262,10 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   bb.agents.configure(context => {
     const own = context.origin.pluginId === bb.pluginId && context.origin.kind === null;
     if (own && kimiCheckMetadataSchema.safeParse(context.pluginMetadata).success &&
-        context.provider.id === 'acp-claude-kimi' && context.host.id === primaryHostId) {
+        ['acp-claude-kimi', 'pi'].includes(context.provider.id) && context.host.id === primaryHostId) {
       return { tools: [], skills: [], instructions: 'Это короткая проверка ответа Kimi. Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы. Не начинай подключение svaib или онбординг.' };
     }
-    const setup = own && context.pluginMetadata.task === 'svaib-connect';
+    const setup = context.pluginMetadata.task === 'svaib-connect';
     const supported = supportsConnection(context.provider.id);
     const base = setup ? account.configure(context) : own && metricsScreen.isTask(context.pluginMetadata) ? metricsScreen.configure(context) : own ? workplaceConfiguration(context)
       : supported ? account.configure(context) : { tools: [], skills: [] };

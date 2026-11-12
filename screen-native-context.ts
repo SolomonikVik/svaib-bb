@@ -6,6 +6,7 @@ import type { PluginBbSdk, PluginKvStorage } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import type { ScreenContext } from './screen-transport';
 import { validatePersistentFolder } from './experiments/account-prototype/folder-selection';
+import { connectionMetadataSchema, type ConnectionBinding } from './experiments/account-prototype/connection';
 
 export type VerifiedScreenCompany = { account_id: string; company_id: string; subject_id: string; epoch: number };
 export interface ScreenAccountPort {
@@ -29,6 +30,8 @@ type Pin = z.infer<typeof pinSchema>;
 const key = (threadId: string) => 'screen:context:' + threadId;
 const freshChat = () => new ScreenContextError('new_clean_thread_required',
   'Контекст этого разговора нельзя безопасно перепривязать. Открой новый чистый чат в нужной рабочей папке.');
+const folderMovePending = () => new ScreenContextError('workspace_selection_required',
+  'Продолжи подключение с партнёром здесь: он проверит выбранную папку и сохранит компанию без нового входа.');
 
 function parseBinding(raw: string): string {
   // The canonical file is a flat two-key object. Token checks also reject duplicate keys
@@ -109,12 +112,13 @@ export function createScreenPluginContext(options: ContextOptions) {
     return parsed.data;
   }
   async function native(threadId: string) {
-    const thread = await options.sdk.threads.get({ threadId });
+    const thread = structuredClone(await options.sdk.threads.get({ threadId }));
     if (thread.id !== threadId || thread.deletedAt || !thread.environmentId) throw new ScreenContextError('thread_unavailable', 'Разговору нужна действующая рабочая среда BB.');
-    const [environment, system, project] = await Promise.all([
+    const [rawEnvironment, system, project] = await Promise.all([
       options.sdk.environments.get({ environmentId: thread.environmentId }), options.sdk.system.config(),
       options.sdk.projects.get({ projectId: thread.projectId }),
     ]);
+    const environment = structuredClone(rawEnvironment);
     if (environment.id !== thread.environmentId || environment.status !== 'ready')
       throw new ScreenContextError('workspace_unavailable', 'Рабочая среда BB ещё не готова. Повтори после её запуска.');
     const chooseFolder = () => new ScreenContextError('workspace_selection_required', 'Для материалов организации нужна постоянная папка. Открой новый разговор BB, выбери No project → New project или существующий проект и оставь Project checkout. Git не нужен. Затем отправь подготовленное продолжение svaib. Файлы пока не меняются.');
@@ -143,7 +147,16 @@ export function createScreenPluginContext(options: ContextOptions) {
     signal.throwIfAborted();
     if (selector !== undefined && !companyId.safeParse(selector).success)
       throw new ScreenContextError('invalid_company', 'Выбери действительную компанию svaib.');
-    const selectedCompany = live.binding.companyId ?? previous?.company_id ?? selector;
+    let rawMetadata: unknown;
+    try { rawMetadata = await options.sdk.threads.getPluginMetadata({ threadId }); } catch { /* no authorized relocation */ }
+    const parsedMetadata = connectionMetadataSchema.safeParse(rawMetadata);
+    const metadata = parsedMetadata.success ? parsedMetadata.data : undefined;
+    const expectedCompany = previous?.company_id ?? metadata?.workspaceCompanyId;
+    if (live.binding.companyId && expectedCompany && live.binding.companyId !== expectedCompany) {
+      if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
+      throw freshChat();
+    }
+    const selectedCompany = live.binding.companyId ?? expectedCompany ?? selector;
     if (!selectedCompany) throw new ScreenContextError('company_required', 'Сначала выбери или создай компанию в svaib и передай её ID при открытии Screen.');
     if (selector !== undefined && selector !== selectedCompany) {
       if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
@@ -158,8 +171,23 @@ export function createScreenPluginContext(options: ContextOptions) {
       environment_id: live.environment.id, host_id: live.environment.hostId, real_root: live.binding.realRoot,
       company_id: verified.company_id, account_id: verified.account_id, subject_id: verified.subject_id,
       source_thread_id: live.thread.sourceThreadId, parent_thread_id: live.thread.parentThreadId };
+    let relocated = false;
     if (previous && JSON.stringify(previous) !== JSON.stringify(candidate)) {
-      await options.kv.set(key(threadId), { ...previous, state: 'blocked' }); throw freshChat();
+      const sameIdentity = previous.company_id === candidate.company_id && previous.account_id === candidate.account_id &&
+        previous.subject_id === candidate.subject_id && previous.host_id === candidate.host_id &&
+        previous.source_thread_id === candidate.source_thread_id && previous.parent_thread_id === candidate.parent_thread_id;
+      const binding = metadata?.binding;
+      relocated = sameIdentity && previous.environment_id !== candidate.environment_id && metadata?.inPlace === true && !!binding &&
+        metadata?.workspaceCompanyId === candidate.company_id && !metadata?.successorThreadId &&
+        binding.projectId === live.thread.projectId && binding.environmentId === candidate.environment_id &&
+        binding.hostId === candidate.host_id && binding.providerId === live.thread.providerId;
+      if (!relocated) {
+        // A legitimate folder switch may be observed by an open Screen before
+        // START validates it. Keep the old pin intact until that check completes.
+        if (sameIdentity && previous.environment_id !== candidate.environment_id)
+          throw folderMovePending();
+        await options.kv.set(key(threadId), { ...previous, state: 'blocked' }); throw freshChat();
+      }
     }
     if (!previous) {
       const lineage = [...new Set([live.thread.sourceThreadId].filter((v): v is string => !!v))];
@@ -187,17 +215,47 @@ export function createScreenPluginContext(options: ContextOptions) {
       (after.binding.companyId !== null && after.binding.companyId !== candidate.company_id) ||
       after.thread.sourceThreadId !== candidate.source_thread_id || after.thread.parentThreadId !== candidate.parent_thread_id ||
       verified.epoch !== options.account.epoch()) {
+      const sameCompanyMove = after.environment.id !== candidate.environment_id &&
+        after.environment.hostId === candidate.host_id && after.thread.projectId === live.thread.projectId &&
+        after.thread.providerId === live.thread.providerId &&
+        (after.binding.companyId === null || after.binding.companyId === candidate.company_id) &&
+        after.thread.sourceThreadId === candidate.source_thread_id && after.thread.parentThreadId === candidate.parent_thread_id &&
+        verified.epoch === options.account.epoch();
+      if (sameCompanyMove) throw folderMovePending();
       if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
       throw freshChat();
     }
     signal.throwIfAborted();
-    if (!previous) await options.kv.set(key(threadId), candidate);
+    if (!previous || relocated) await options.kv.set(key(threadId), candidate);
     signal.throwIfAborted();
     return { context: { account_id: candidate.account_id, company_id: candidate.company_id,
       subject_id: candidate.subject_id, thread_id: candidate.thread_id, environment_id: candidate.environment_id,
       host_id: candidate.host_id } satisfies ScreenContext, realRoot: candidate.real_root, epoch: verified.epoch };
   }
-  return { async resolve(threadId: string, signal = new AbortController().signal, companyId?: string) {
+  return { async validateWorkspaceMove(threadId: string, from: ConnectionBinding, to: ConnectionBinding, companyId?: string) {
+    if (from.projectId !== to.projectId || from.hostId !== to.hostId || from.providerId !== to.providerId) throw freshChat();
+    const live = await native(threadId);
+    const previous = await stored(threadId);
+    if (previous?.state === 'blocked' || live.thread.projectId !== to.projectId || live.thread.providerId !== to.providerId ||
+        live.environment.id !== to.environmentId || live.environment.hostId !== to.hostId) throw freshChat();
+    const oldEnv = await options.sdk.environments.get({ environmentId: from.environmentId });
+    if (oldEnv.id !== from.environmentId || oldEnv.hostId !== from.hostId || !oldEnv.path) throw freshChat();
+    const oldBinding = await readCompanyBinding(oldEnv.path, true);
+    const expected = previous?.company_id ?? companyId ?? oldBinding.companyId;
+    if ((companyId && expected !== companyId) || (oldBinding.companyId && expected !== oldBinding.companyId) ||
+        (live.binding.companyId && expected && live.binding.companyId !== expected)) throw freshChat();
+    if (previous) {
+      const verified = await options.account.verifiedCompany(previous.company_id);
+      if (verified.account_id !== previous.account_id || verified.subject_id !== previous.subject_id ||
+          verified.company_id !== previous.company_id || verified.epoch !== options.account.epoch() ||
+          previous.host_id !== to.hostId || previous.source_thread_id !== live.thread.sourceThreadId ||
+          previous.parent_thread_id !== live.thread.parentThreadId) throw freshChat();
+    }
+    const after = await native(threadId);
+    if (after.environment.id !== to.environmentId || after.binding.realRoot !== live.binding.realRoot ||
+        after.binding.companyId !== live.binding.companyId) throw freshChat();
+    return expected ?? live.binding.companyId ?? undefined;
+  }, async resolve(threadId: string, signal = new AbortController().signal, companyId?: string) {
     const pending = (queues.get(threadId) ?? Promise.resolve()).catch(() => {}).then(() => resolveUnlocked(threadId, signal, companyId));
     queues.set(threadId, pending);
     try { return await pending; } finally { if (queues.get(threadId) === pending) queues.delete(threadId); }

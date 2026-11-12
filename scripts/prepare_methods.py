@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import uuid
 from contextlib import contextmanager
@@ -23,6 +24,36 @@ MAX_FILES = 1024
 
 class PreparationError(ValueError):
     pass
+
+
+class HookRuntimeError(ValueError):
+    pass
+
+
+def check_hook_runtime(provider: str) -> None:
+    """Check the command used by shipped hooks, not this helper's interpreter."""
+    # Match Pi's direct spawn exactly: an override is one executable path,
+    # including spaces, not a shell command. Claude/Codex hooks still use python3.
+    override = os.environ.get("SVAIB_PYTHON") if provider == "pi" else None
+    executable = shutil.which(override or "python3")
+    requirement = ("Python 3.10+, выбранный через SVAIB_PYTHON" if override else "python3 3.10+")
+    action = ("Проверьте исполнимый Python в SVAIB_PYTHON" if override else "Подготовьте Python с командой python3")
+    message = (f"Не запускается {requirement}, необходимый хукам svaib в окружении BB. "
+               f"{action} и повторите этот шаг в том же рабочем месте. "
+               "Git Bash эту зависимость не заменяет; входы и файлы не изменены.\n")
+    if not executable:
+        raise HookRuntimeError(message)
+    marker = b"svaib-hook-python-ok"
+    try:
+        result = subprocess.run(
+            [executable, "-c", "import sys; sys.exit(1) if sys.version_info < (3, 10) else print('svaib-hook-python-ok')"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise HookRuntimeError(message) from error
+    if result.returncode != 0 or result.stdout.strip() != marker:
+        raise HookRuntimeError(message)
 
 
 def _regular(path: Path, limit: int) -> bytes:
@@ -269,7 +300,10 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, required=True)
     args = parser.parse_args()
     try:
+        check_hook_runtime(args.provider)
         result = prepare(args.provider, args.data_dir)
+    except HookRuntimeError as error:
+        parser.exit(1, str(error))
     except (ValueError, OSError, KeyError, IndexError, TypeError):
         parser.exit(1, "Method preparation refused: source or owned destination validation failed.\n")
     print(json.dumps(result))

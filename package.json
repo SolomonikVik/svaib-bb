@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-svaib-workplace",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48.1",
@@ -23,12 +23,14 @@
     "@get-bb/plugin-sdk": "0.6.104",
     "bb-plugin-svaib-screen-pilot": "file:./components/screen",
     "echarts": "6.1.0",
+    "proper-lockfile": "4.1.2",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "4.1.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "better-sqlite3": "^12.0.0",

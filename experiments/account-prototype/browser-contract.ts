@@ -1,6 +1,7 @@
 import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { kimiHostMethods } from '../../kimi-contract';
+import { kimiPiHostMethods } from '../../kimi-pi-contract';
 
 const hookInput = z.object({ executable: z.string().min(1), cwd: z.string().min(1) }).strict();
 const hookReview = z.object({ fingerprint: z.string().regex(/^[0-9a-f]{64}$/), hooks: z.array(z.object({
@@ -9,6 +10,7 @@ const hookReview = z.object({ fingerprint: z.string().regex(/^[0-9a-f]{64}$/), h
 
 export const browserContract = defineRpcContract({
   ...kimiHostMethods,
+  ...kimiPiHostMethods,
   automaticHooks: { input: hookInput, output: hookReview.extend({ changed: z.boolean() }).strict() },
   openLogin: {
     input: z.object({ url: z.string().url().refine(value => {

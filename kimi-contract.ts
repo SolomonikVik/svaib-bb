@@ -1,5 +1,6 @@
 import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
+import { kimiPiStatusSchema, nativePiStatusSchema } from './kimi-pi-contract';
 
 export const kimiCheckMetadataSchema = z.object({ kimiSetup: z.literal(1), kimiCheck: z.uuid().optional() }).strict();
 
@@ -21,9 +22,11 @@ export const kimiHostMethods = {
   kimiReplaceKey: { input: z.object({ apiKey: key, diagnosticId: z.uuid().optional() }).strict(), output: z.null() },
 };
 export const kimiViewSchema = z.object({
+  harness: z.enum(['claude-code', 'pi']).default('claude-code'),
+  piMode: z.enum(['native', 'managed']).default('native'),
   revision: z.number().int().nonnegative(),
   canReplaceKey: z.boolean(),
-  hidden: z.boolean(), stage: z.enum(['intro', 'node', 'key', 'installing', 'registration', 'verify', 'complete', 'blocked']),
+  hidden: z.boolean(), stage: z.enum(['intro', 'node', 'key', 'installing', 'registration', 'restart', 'verify', 'complete', 'blocked']),
   message: z.string(), hostId: z.string(), testThreadId: z.string().nullable(),
   verifyModel: z.string().nullable().default(null), manualRegistration: z.string().nullable(),
   keyChangedAt: z.number().nullable().default(null),
@@ -31,7 +34,7 @@ export const kimiViewSchema = z.object({
   startedAt: z.number().nullable().default(null),
   installProgress: z.object({
     step: z.enum(['runtime-download', 'adapter-install', 'runtime-probe']),
-    component: z.enum(['node', 'adapter', 'claude-code']).optional(),
+    component: z.enum(['node', 'adapter', 'claude-code', 'pi']).optional(),
     artifact: z.enum(['node-checksums', 'node-archive']).optional(),
     downloadBytes: z.number().int().nonnegative().optional(),
     totalBytes: z.number().int().positive().optional(),
@@ -45,6 +48,13 @@ export const kimiViewSchema = z.object({
 }).strict();
 export type KimiView = z.infer<typeof kimiViewSchema>;
 export const kimiRpcContract = defineRpcContract({
+  kimiPiRuntime: { input: z.null(), output: z.union([
+    kimiPiStatusSchema.extend({ mode: z.literal('managed'), hostId: z.string().nullable() }),
+    nativePiStatusSchema.extend({ mode: z.literal('native'), hostId: z.string().nullable() }),
+  ]),
+    experimental_description: 'Проверенный запуск и профиль Pi настройщика Kimi на компьютере BB; только пути и состояние, без ключей.' },
+  kimiSelectHarness: { input: z.object({ harness: z.enum(['claude-code', 'pi']) }).strict(), output: kimiViewSchema },
+  kimiSelectPiMode: { input: z.object({ mode: z.enum(['native', 'managed']) }).strict(), output: kimiViewSchema },
   kimiStatus: { input: z.null(), output: kimiViewSchema },
   kimiOpen: { input: z.null(), output: kimiViewSchema },
   kimiStart: { input: z.object({ apiKey: key.optional() }).strict(), output: kimiViewSchema },

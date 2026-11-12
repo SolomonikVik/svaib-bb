@@ -4,12 +4,26 @@ import { browserContract } from './browser-contract';
 import { nativeHookAutomatic } from './hook-native';
 import { join } from 'node:path';
 import { inspectKimi, prepareKimi, replaceKimiKey } from '../../kimi-host';
+import { inspectKimiPi, prepareKimiPi } from '../../kimi-pi-host';
+import { inspectNativeKimiPi, prepareNativeKimiPi } from '../../kimi-pi-native';
 import { randomUUID } from 'node:crypto';
 import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep } from '../../kimi-diagnostics';
 import { logKimiRuntime } from '../../kimi-runtime-diagnostics';
 
 // The authorization URL never passes through a model, terminal or saved thread.
 export default experimental_defineHostEntry({ contract: browserContract, experimental_signals: kimiDiagnosticSignals, handlers: {
+  async kimiPiNativeInspect(_, context) { return inspectNativeKimiPi(join(context.experimental_paths.dataDir, 'kimi-pi-native'), context.signal); },
+  async kimiPiNativePrepare({ apiKey, replaceKey, diagnosticId }, context) {
+    const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
+    return kimiStep(log, replaceKey ? 'key-replace' : 'prepare', () => prepareNativeKimiPi(
+      join(context.experimental_paths.dataDir, 'kimi-pi-native'), apiKey, context.signal, log, { replaceKey }));
+  },
+  async kimiPiInspect(_, context) { return inspectKimiPi(join(context.experimental_paths.dataDir, 'kimi-pi'), context.signal); },
+  async kimiPiPrepare({ apiKey, replaceKey, diagnosticId }, context) {
+    const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
+    return kimiStep(log, replaceKey ? 'key-replace' : 'prepare', () => prepareKimiPi(
+      join(context.experimental_paths.dataDir, 'kimi-pi'), apiKey, context.signal, log, { replaceKey }));
+  },
   async kimiInspect(_, context) { return inspectKimi(join(context.experimental_paths.dataDir, 'kimi-cc'), context.signal); },
   async kimiPrepare({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
