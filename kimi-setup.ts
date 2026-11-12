@@ -49,10 +49,11 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     const entry = event.payload;
     writeDiagnostic(entry);
     if (entry.diagnosticId !== activePreparation || view.stage !== 'installing' || view.phase !== 'components') return;
-    if (!['runtime-download', 'adapter-install', 'runtime-probe'].includes(entry.step) || !['start', 'progress', 'success'].includes(entry.outcome)) return;
+    if (!['runtime-install', 'runtime-download', 'adapter-install', 'runtime-probe'].includes(entry.step) || !['start', 'progress', 'success', 'fallback'].includes(entry.outcome)) return;
     // Ephemeral progress never races persisted state writes; a reload resumes the operation.
     view = { ...view, revision: view.revision + 1, installProgress: {
-      step: entry.step as 'runtime-download' | 'adapter-install' | 'runtime-probe',
+      step: entry.step as 'runtime-install' | 'runtime-download' | 'adapter-install' | 'runtime-probe',
+      ...(entry.runtimeKind ? { runtimeKind: entry.runtimeKind } : {}),
       ...(entry.component && ['node', 'adapter', 'claude-code', 'pi'].includes(entry.component) ? { component: entry.component as 'node' | 'adapter' | 'claude-code' | 'pi' } : {}),
       ...(entry.artifact ? { artifact: entry.artifact } : {}),
       ...(entry.downloadBytes !== undefined ? { downloadBytes: entry.downloadBytes } : {}),
@@ -140,6 +141,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       try {
         let current = status;
         if (!current.installed) {
+          await hostMutation('prepare', 'setup', diagnosticId => client.call('kimiPiNativePrerequisites', { diagnosticId }, target()));
           await pi.installNative();
           current = await client.call('kimiPiNativeInspect', null, target());
           if (!current.installed || current.profile === 'blocked') throw new Error('PI_NATIVE_INSTALL_FAILED');

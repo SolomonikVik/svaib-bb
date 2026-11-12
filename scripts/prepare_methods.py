@@ -33,8 +33,9 @@ class HookRuntimeError(ValueError):
 def check_hook_runtime(provider: str) -> None:
     """Check the command used by shipped hooks, not this helper's interpreter."""
     # Match Pi's direct spawn exactly: an override is one executable path,
-    # including spaces, not a shell command. Claude/Codex hooks still use python3.
-    override = os.environ.get("SVAIB_PYTHON") if provider == "pi" else None
+    # including spaces, not a shell command. BB forwards the same interpreter
+    # to every provider and repairs old python3 registrations with an owned shim.
+    override = os.environ.get("SVAIB_PYTHON")
     executable = shutil.which(override or "python3")
     requirement = ("Python 3.10+, выбранный через SVAIB_PYTHON" if override else "python3 3.10+")
     action = ("Проверьте исполнимый Python в SVAIB_PYTHON" if override else "Подготовьте Python с командой python3")

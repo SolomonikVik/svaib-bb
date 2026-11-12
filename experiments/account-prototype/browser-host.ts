@@ -9,9 +9,23 @@ import { inspectNativeKimiPi, prepareNativeKimiPi } from '../../kimi-pi-native';
 import { randomUUID } from 'node:crypto';
 import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep } from '../../kimi-diagnostics';
 import { logKimiRuntime } from '../../kimi-runtime-diagnostics';
+import { ensureWindowsNode } from '../../windows-node';
+import { inspectRuntime, prepareRuntime, cancelRuntime } from '../../runtime-preparation';
+import { runtimeSignals } from '../../runtime-contract';
 
 // The authorization URL never passes through a model, terminal or saved thread.
-export default experimental_defineHostEntry({ contract: browserContract, experimental_signals: kimiDiagnosticSignals, handlers: {
+export default experimental_defineHostEntry({ contract: browserContract, experimental_signals: { ...kimiDiagnosticSignals, ...runtimeSignals }, handlers: {
+  async runtimePrepare(input, context) {
+    return prepareRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation'), context.signal, { ...input,
+      progress: ({ platform, status, step, message }) => context.experimental_emitSignal('runtimeProgress', { platform, status, step, message }) });
+  },
+  async runtimeInspect(_, context) { return inspectRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation')); },
+  async runtimeCancel(_, context) { return cancelRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation')); },
+  async kimiPiNativePrerequisites({ diagnosticId }, context) {
+    const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
+    await ensureWindowsNode(context.signal, log);
+    return null;
+  },
   async kimiPiNativeInspect(_, context) { return inspectNativeKimiPi(join(context.experimental_paths.dataDir, 'kimi-pi-native'), context.signal); },
   async kimiPiNativePrepare({ apiKey, replaceKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));

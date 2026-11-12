@@ -33,7 +33,8 @@ export const kimiViewSchema = z.object({
   phase: z.enum(['components', 'access', 'check']).nullable().default(null),
   startedAt: z.number().nullable().default(null),
   installProgress: z.object({
-    step: z.enum(['runtime-download', 'adapter-install', 'runtime-probe']),
+    step: z.enum(['runtime-install', 'runtime-download', 'adapter-install', 'runtime-probe']),
+    runtimeKind: z.enum(['winget', 'portable']).optional(),
     component: z.enum(['node', 'adapter', 'claude-code', 'pi']).optional(),
     artifact: z.enum(['node-checksums', 'node-archive']).optional(),
     downloadBytes: z.number().int().nonnegative().optional(),

@@ -5,9 +5,11 @@ Exit zero means native login completed/already available, never BB proof.
 """
 
 import argparse
+import errno
 import json
 import os
 import queue
+import re
 import signal
 import shutil
 import subprocess
@@ -29,6 +31,14 @@ class LoginError(RuntimeError):
     pass
 
 
+class NativeStartupError(LoginError):
+    pass
+
+
+class NativeCompatibilityError(LoginError):
+    pass
+
+
 class WaitExpired(LoginError):
     pass
 
@@ -41,8 +51,34 @@ class RenewRequested(Exception):
     pass
 
 
+def native_command(argv, platform=None):
+    """Only batch launchers use cmd; each argv boundary is escaped explicitly.
+
+    Matches the cross-spawn Windows escaping algorithm; no shell=True and no
+    caller supplied command string. Native executables keep their original argv.
+    """
+    if (platform or sys.platform) != "win32" or not re.search(r"\.(cmd|bat)$", str(argv[0]), re.I):
+        return argv
+    values = [str(value) for value in argv]
+    if any(re.search(r"[\x00\r\n]", value) for value in values):
+        raise NativeStartupError("Недопустимый аргумент Windows launcher.")
+    meta = r'([()\]\[%!^"`<>&|;, *?])'
+    escape = lambda value: re.sub(meta, r"^\1", value)
+    double = bool(re.search(r"node_modules[\\/]\.bin[\\/][^\\/]+\.(cmd|bat)$", values[0], re.I))
+    arguments = []
+    for value in values[1:]:
+        value = re.sub(r'(\\*)"', lambda match: match[1] * 2 + '\\"', value)
+        value = re.sub(r"(\\+)$", lambda match: match[1] * 2, value)
+        value = escape('"' + value + '"')
+        arguments.append(escape(value) if double else value)
+    executable = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
+    # Return an exact CreateProcess command line, avoiding list2cmdline's second
+    # quoting pass over cmd metacharacters.
+    return '"' + executable + '" /d /s /v:off /c "' + " ".join([escape(values[0]), *arguments]) + '"'
+
+
 def command_json(argv, cwd=None):
-    result = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=20, check=False)
+    result = subprocess.run(native_command(argv), cwd=cwd, capture_output=True, timeout=20, check=False)
     if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
         raise LoginError("Не удалось проверить выбранное рабочее место.")
     try:
@@ -81,21 +117,25 @@ def profile_lock(root):
     path = root / ".svaib-native-oauth.lock"
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        if os.name == "nt":
-            import msvcrt
+        try:
+            if os.name == "nt":
+                import msvcrt
 
-            os.write(descriptor, b"0")
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+                # Windows permits locking a byte beyond EOF. Writing before
+                # acquiring the lock raises EACCES when another owner holds it.
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
 
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise
+            raise LoginError(
+                "В этом профиле уже ожидается вход. Продолжи прежний терминал."
+            ) from None
         yield
-    except BlockingIOError:
-        raise LoginError(
-            "В этом профиле уже ожидается вход. Продолжи прежний терминал."
-        ) from None
     finally:
         os.close(descriptor)
         # Keep the empty advisory-lock file: OS releases the lock even after a
@@ -105,14 +145,22 @@ def profile_lock(root):
 class AppServer:
     def __init__(self, executable, cwd, config_root):
         environment = dict(os.environ, CODEX_HOME=str(config_root))
-        self.process = subprocess.Popen(
-            [str(executable), "app-server", "--stdio"],
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            self.process = subprocess.Popen(
+                native_command([str(executable), "app-server", "--stdio"]),
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            extension = Path(executable).suffix.lower()
+            extension = extension if extension in (".exe", ".cmd", ".bat") else "native"
+            raise NativeStartupError(
+                "Не удалось запустить Codex app-server. Проверьте обнаруженный executable и его запуск в этом рабочем месте. "
+                f"stage=spawn host={sys.platform} launcher={extension} code={error.errno}."
+            ) from None
         self.messages = queue.Queue(maxsize=128)
         self.pending = []
         self.identifier = 0
@@ -189,6 +237,13 @@ class AppServer:
         message = self.wait(lambda obj: obj.get("id") == identifier)
         if "error" in message:
             # Native error bodies can contain the full authorization URL. Never forward them.
+            error = message["error"]
+            if isinstance(error, dict) and error.get("code") in (-32601, -32602):
+                # Method and parameter support, not a release-number allowlist.
+                raise NativeCompatibilityError(
+                    "Codex app-server не поддерживает нужную операцию или её параметры. "
+                    "Управляемый вход недоступен с этим API; сохранённые входы не изменены."
+                )
             raise LoginError(
                 "Codex не смог выполнить шаг входа. Продолжи подключение в BB."
             )
@@ -241,7 +296,7 @@ def open_browser(url):
     if executable == "rundll32.exe":
         arguments = [executable, "url.dll,FileProtocolHandler", url]
     subprocess.Popen(
-        arguments,
+        native_command(arguments),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -347,6 +402,7 @@ def login(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runtime-path")
     for name in (
         "codex",
         "cwd",
@@ -359,6 +415,10 @@ def main():
     ):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()
+    if args.runtime_path:
+        # Passed as literal argv by the BB-owned preparation, never shell text.
+        # This terminal may have inherited BB's PATH from before WinGet finished.
+        os.environ["PATH"] = args.runtime_path
     if args.server_key not in SERVER_KEYS:
         raise LoginError("Неизвестный ключ сервера svaib.")
     for name in ("codex", "cwd", "config_root"):
@@ -371,11 +431,6 @@ def main():
     ).resolve()
     if configured != args.config_root:
         raise LoginError("Профиль Codex не совпал с текущим рабочим местом.")
-    version = subprocess.run(
-        [str(args.codex), "--version"], capture_output=True, timeout=10, check=False
-    )
-    if version.returncode or version.stdout.strip() != b"codex-cli 0.166.0":
-        raise LoginError("Эта версия Codex ещё не проверена для управляемого входа.")
     verify_binding(args)
     with profile_lock(args.config_root):
         requests = queue.Queue(maxsize=1)
@@ -420,6 +475,10 @@ if __name__ == "__main__":
     except (WaitExpired, LoginIncomplete):
         print("Вход не завершён. Продолжи подключение в BB; вход кабинета сохранён.", file=sys.stderr)
         sys.exit(1)
+    except (NativeStartupError, NativeCompatibilityError) as error:
+        # These classes contain only locally authored diagnostics, no native body.
+        print(str(error), file=sys.stderr)
+        sys.exit(20)
     except Exception:  # noqa: BLE001 - process boundary must redact private protocol failures
         # Even unexpected protocol failures may include a private OAuth URL in
         # their exception text. No native body or traceback leaves the helper.

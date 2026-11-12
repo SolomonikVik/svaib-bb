@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'n
 import { dirname, join, win32 } from 'node:path';
 import { kimiErrorFields, type KimiDiagnosticLog } from './kimi-diagnostics';
 import { experimental_hostToolchain as toolchain } from '@get-bb/plugin-sdk/process';
+import { discoverWindowsNode, ensureWindowsNode } from './windows-node';
 
 const VERSION = '22.23.4';
 const jobs = new Map<string, Promise<KimiRuntime>>();
@@ -29,6 +30,10 @@ async function probe(executable: string, signal: AbortSignal): Promise<string | 
 
 /** Uses BB's supported toolchain API, including its npm; never assumes PATH node exists. */
 export async function existingKimiRuntime(signal: AbortSignal): Promise<KimiRuntime | null> {
+  if (process.platform === 'win32') {
+    try { await toolchain.refresh(); } catch { signal.throwIfAborted(); }
+    return (await discoverWindowsNode(signal)).runtime;
+  }
   try {
     const pair = toolchain.npmCli();
     if (pair) {
@@ -136,8 +141,12 @@ async function managedRuntime(parent: string, signal: AbortSignal, log: KimiDiag
 }
 
 export async function ensureKimiRuntime(profileRoot: string, signal: AbortSignal, options: { forceManaged?: boolean; log?: KimiDiagnosticLog } = {}) {
-  if (!options.forceManaged) { const ready = await existingKimiRuntime(signal); if (ready) return ready; }
+  const log = options.log ?? (() => {});
+  if (!options.forceManaged) {
+    const ready = process.platform === 'win32' ? await ensureWindowsNode(signal, log) : await existingKimiRuntime(signal);
+    if (ready) return ready;
+  }
   const parent = dirname(profileRoot);
   const pending = jobs.get(parent); if (pending) return pending;
-  const run = managedRuntime(parent, signal, options.log ?? (() => {})).finally(() => jobs.delete(parent)); jobs.set(parent, run); return run;
+  const run = managedRuntime(parent, signal, log).finally(() => jobs.delete(parent)); jobs.set(parent, run); return run;
 }

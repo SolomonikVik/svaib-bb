@@ -22,7 +22,8 @@ const exited = (terminal: Awaited<ReturnType<PluginBbSdk['terminals']['get']>>) 
 export class NativeLogin {
   private record: Record | null = null;
   private starting: Promise<{ terminalId: string; message: string; finished: boolean }> | null = null;
-  constructor(private sdk: PluginBbSdk, private kv: PluginKvStorage, private pluginId: string) {}
+  constructor(private sdk: PluginBbSdk, private kv: PluginKvStorage, private pluginId: string,
+    private python?: (hostId: string) => Promise<string | { executable: string; path?: string }>) {}
   async load() { const parsed = recordSchema.safeParse(await this.kv.get(key)); if (parsed.success) this.record = parsed.data; }
   owns(owner: Owner) { return !!this.record && this.record.runId === owner.runId && this.record.threadId === owner.threadId &&
     JSON.stringify(this.record.binding) === JSON.stringify(owner.binding); }
@@ -91,12 +92,18 @@ export class NativeLogin {
     const plugin = plugins.plugins.find(item => item.id === this.pluginId);
     if (!plugin?.rootDir || !environment.path || system.primaryHostId !== owner.binding.hostId || environment.hostId !== owner.binding.hostId || owner.binding.providerId !== 'codex')
       throw new Error('Управляемый вход доступен только на проверенном локальном рабочем месте Codex.');
-    if (!cli.codex?.installed || cli.codex.executablePath !== input.executable || !['0.166.0', 'codex-cli 0.166.0'].includes(cli.codex.currentVersion ?? ''))
-      throw new Error('Выбранный Codex не совпал с проверенным executable этого рабочего места.');
+    if (!cli.codex?.installed || !cli.codex.executablePath)
+      throw new Error('Codex не найден в этом рабочем месте.');
+    if (cli.codex.executablePath !== input.executable)
+      throw new Error('Путь запуска не совпал с Codex, обнаруженным в этом рабочем месте.');
     const helper = join(plugin.rootDir, 'experiments/account-prototype/skills/svaib-workplace-connect/scripts/codex_oauth_login.py');
-    const argv = ['python3', helper, '--codex', input.executable, '--config-root', input.configRoot, '--server-key', input.serverKey,
+    const runtime = this.python ? await this.python(owner.binding.hostId) : 'python3';
+    const python = typeof runtime === 'string' ? runtime : runtime.executable;
+    if (this.python) await valid();
+    const argv = [python, helper, '--codex', input.executable, '--config-root', input.configRoot, '--server-key', input.serverKey,
       '--cwd', environment.path, '--thread-id', owner.threadId, '--project-id', owner.binding.projectId,
-      '--environment-id', owner.binding.environmentId, '--host-id', owner.binding.hostId];
+      '--environment-id', owner.binding.environmentId, '--host-id', owner.binding.hostId,
+      ...(typeof runtime !== 'string' && runtime.path ? ['--runtime-path', runtime.path] : [])];
     const terminal = await this.sdk.terminals.create({ scope: { kind: 'thread', threadId: owner.threadId },
       start: { mode: 'argv', argv }, title: 'Вход svaib · Codex', cols: 80, rows: 24 });
     const record: Record = { ...owner, terminalId: terminal.id, startedAt: Date.now(), input };

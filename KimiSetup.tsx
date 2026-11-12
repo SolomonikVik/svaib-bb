@@ -113,8 +113,10 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
   const phaseLabels = ['Устанавливаю компоненты', 'Настраиваю доступ', 'Проверяю ответ Kimi', 'Готово к работе'];
   const phaseIndex = view.stage === 'complete' ? 3 : ['components', 'access', 'check'].indexOf(view.phase ?? '');
   const progress = view.installProgress;
-  const progressLabel = progress?.step === 'runtime-download'
-    ? progress.artifact === 'node-checksums' ? 'Получаю контрольные суммы Node.js…' : 'Скачиваю Node.js…'
+  const progressLabel = progress?.step === 'runtime-install'
+    ? progress.runtimeKind === 'portable' ? 'Общий Node.js недоступен. Проверяю резервный способ установки…' : 'Устанавливаю общий Node.js LTS. Подтверди системный запрос Windows, если он появится…'
+    : progress?.step === 'runtime-download'
+    ? progress.artifact === 'node-checksums' ? 'Получаю контрольные суммы переносимого Node.js…' : 'Скачиваю переносимый Node.js для резервной установки…'
     : progress?.step === 'adapter-install' ? `Скачиваю и устанавливаю ${isPi ? 'Pi' : 'Claude Code'}. На медленном соединении это может занять до 15 минут…`
     : progress?.step === 'runtime-probe' ? progress.component === 'pi' ? 'Проверяю запуск Pi…' : progress.component === 'claude-code' ? 'Проверяю запуск Claude Code…'
       : progress.component === 'adapter' ? 'Проверяю адаптер Kimi…' : 'Проверяю запуск Node.js…' : null;

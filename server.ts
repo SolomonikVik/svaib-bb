@@ -4,6 +4,7 @@ import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { defineRpcContract, type BbPluginApi, type PluginAgentConfiguration, type PluginAgentConfigurationContext } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { registerKimiSetup } from './kimi-setup';
+import { registerRuntimeGate } from './runtime-gate';
 import { kimiCheckMetadataSchema } from './kimi-contract';
 import { contextualPreviewText, actionPrompt, getAction, getWorkspace, resolveActionContext, validateInstructions, READ_ONLY_RULES } from './catalog';
 import { aspectIdSchema, idSchema, loadConfig, loadConfigSync, workspaceSchema, type CatalogWorkspace, type WorkplaceConfig } from './config';
@@ -148,6 +149,7 @@ export async function initializePluginForTesting(bb: BbPluginApi, validatePersis
 }
 
 async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTesting?: PersistentRootValidator) {
+  const runtime = registerRuntimeGate(bb);
   const settings = bb.settings.define({
     configPath: { type: 'string', label: 'Локальное описание пространств (абсолютный путь на BB-сервере)', default: '' },
     productionOAuthSession: { type: 'string', label: 'Подключение svaib (служебное, не редактировать)', secret: true },
@@ -349,11 +351,13 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   bb.cli.register({
     name: 'svaib-workplace', summary: 'Inspect workplace contexts or apply an explicitly enabled metrics snapshot',
     commands: [
+      ...runtime.commands,
       { name: 'status', summary: 'Show contexts and source freshness', usage: 'bb svaib-workplace status [--json]' },
       { name: 'sources', summary: 'List whitelisted source paths', usage: 'bb svaib-workplace sources [--json]' },
       { name: 'apply-metrics', summary: 'Apply a validated metrics snapshot to one opted-in workspace', usage: 'bb svaib-workplace apply-metrics --workspace <id> --file <absolute-json> --expected-snapshot <preparedAt> [--check]' },
     ],
-    async run(argv) {
+    async run(argv, context) {
+      if (argv[0] === 'runtime') return runtime.run(argv.slice(1), context.signal);
       const json = argv.includes('--json');
       const args = argv.filter((value) => value !== '--json');
       const command = args[0];

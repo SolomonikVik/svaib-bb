@@ -8,7 +8,6 @@ import { connectionProviders, supportsConnection } from './connection-providers'
 export const CONNECTION_SKILL = 'svaib-workplace-connect';
 export const START_TOOL = 'svaib_connect_start';
 export const BEGIN_TOOL = 'svaib_connect_begin';
-export const FRESH_TOOL = 'svaib_connect_verify';
 export const WAIT_TOOL = 'svaib_connect_wait';
 const NATIVE_TOOL = 'svaib_connect_native_start';
 export const connectionBindingSchema = z.object({
@@ -35,9 +34,9 @@ const NORMAL_WORK_GUIDANCE = 'В обычном разговоре выполн�
   'Если сводка показывает незавершённые начальные этапы, коротко подсвети ближайший и продолжай поручение. Если без настройки нельзя выполнить само поручение, объясни зависимость и предложи нужное действие. ' +
   'Оставшиеся рабочие сценарии после начальных этапов не требуют напоминания при каждом старте. ' +
   'При поручении продолжить настройку svaib или шаг кабинета прочитай svaib-workplace-connect; после работающего native MCP — svaib:onboarding. Сохраняй работающие BB, модель, плагины и входы.';
-const ACTIVE_ONBOARDING_GUIDANCE = 'Уже порученный онбординг продолжай после каждого ответа до завершения начальных этапов по свежим company marks: connect, space, profile, zone, first-work = done. Фаза BB этого не доказывает. Пауза или смена задачи останавливает путь. Новый чат нужен только для не появившихся после подключения MCP-инструментов или другой выбранной папки; иначе продолжай здесь.';
+const ACTIVE_ONBOARDING_GUIDANCE = 'Уже порученный онбординг продолжай после каждого ответа до завершения начальных этапов по свежим company marks: connect, space, profile, zone, first-work = done. Фаза BB этого не доказывает. Пауза или смена задачи останавливает путь. Настройку и проверку MCP продолжай здесь; техническое обновление инструментов выполняется средствами харнеса без отдельного этапа svaib.';
 
-const connectionTools = (provider: string) => [START_TOOL, BEGIN_TOOL, FRESH_TOOL, WAIT_TOOL,
+const connectionTools = (provider: string) => [START_TOOL, BEGIN_TOOL, WAIT_TOOL,
   ...(provider === 'codex' ? [NATIVE_TOOL, HOOK_TOOL] : [])];
 
 /** Use BB's root composer: BB owns the chat, selection and permissions. */
@@ -58,9 +57,9 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
   const metadata = connectionMetadataSchema.safeParse(context.pluginMetadata);
   if ((context.origin.pluginId !== pluginId || context.origin.kind !== null) && (!metadata.success || !metadata.data.inPlace))
     return { tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL], instructions: NORMAL_WORK_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE };
-  const unsupported = { ...empty, instructions: 'Настройка подключения недоступна для этого разговора. Верни пользователя к странице «Моё рабочее место». Не меняй подключения и не начинай OAuth.' };
+  const unsupported = { ...empty, skills: [CONNECTION_SKILL], instructions: 'Служебная привязка BB-подключения недоступна или не совпадает с текущим разговором. Не управляй прежним OAuth-процессом и не переноси его данные. Это не запрещает явно порученную настройку native MCP в фактическом текущем рабочем месте по скиллу svaib-workplace-connect. Проверь реальный CLI, профиль и сохранённый вход; отдельный flow или проверочный разговор для этого не нужен.' };
   if (!metadata.success) return unsupported;
-  if (metadata.data.successorThreadId) return { ...empty, skills: [CONNECTION_SKILL], instructions: `Подключение уже продолжается в @thread:${metadata.data.successorThreadId}. Дай эту ссылку и помоги по одному действию. Не повторяй вход, установку и не создавай новый разговор.` };
+  if (metadata.data.successorThreadId) return { ...unsupported, instructions: unsupported.instructions + ` У прежнего подключения есть разговор @thread:${metadata.data.successorThreadId}; это источник истории, а не обязательный переход. Явно порученную настройку native MCP продолжай здесь.` };
   const prior = metadata.data.binding;
   if (metadata.data.inPlace && prior && prior.environmentId !== context.environment.id &&
       prior.projectId === context.project.id && prior.hostId === context.host.id && prior.providerId === context.provider.id &&
@@ -74,7 +73,7 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
     NORMAL_WORK_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE + ' ' + continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId) };
   if (metadata.data.continuation) {
     try { checkContinuation(metadata.data.continuation, context.project.id, context.environment.id); }
-    catch (error) { return { ...empty, skills: [CONNECTION_SKILL], instructions: error instanceof Error ? error.message : 'Передача недоступна. Уточни недостающее здесь; сохрани входы.' }; }
+    catch { return { ...unsupported, instructions: unsupported.instructions + ' Сохранённый пакет поручения относится к другой среде: не используй его как выбор компании, папки или разрешение на запись. Текущее явное поручение человека сохраняется.' }; }
   }
   if (metadata.data.targetHostId && metadata.data.targetHostId !== context.host.id) return unsupported;
   const actual = { projectId: context.project.id, environmentId: context.environment.id,
@@ -88,12 +87,12 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
       : 'Папка проекта BB сама по себе не подтверждает, что пользователь выбрал её для пространства организации. Учитывай уже подтверждённый выбор; иначе уточни его. '
     : '';
   if (metadata.data.unified) return {
-    tools: [...(metadata.data.phase === 'setup' ? [BEGIN_TOOL, FRESH_TOOL, WAIT_TOOL] : [BEGIN_TOOL]), ...(metadata.data.phase === 'setup' && context.provider.id === 'codex' ? [NATIVE_TOOL, HOOK_TOOL] : [])], skills: [CONNECTION_SKILL],
+    tools: [BEGIN_TOOL, WAIT_TOOL, ...(context.provider.id === 'codex' ? [NATIVE_TOOL, HOOK_TOOL] : [])], skills: [CONNECTION_SKILL],
     instructions: `Единое подключение svaib уже запущено пользователем. Рабочее место: ${JSON.stringify(actual)}. Прочитай скилл ${CONNECTION_SKILL}. ${continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId)} ` +
       `Ты уже в разговоре подключения: не вызывай svaib_connect_start или RPC connect и не направляй пользователя в этот же разговор. Продолжай текущий этап здесь. Ошибка запуска хука требует диагностики, а не нового разговора или повторного OAuth. ` +
       `Для проверки используй настоящий MCP svaib whoami этого разговора; уже полученный свежий успешный ответ повторно не запрашивай. Если он работает, сохрани вход и продолжай исходное поручение здесь. ` +
       `При несовпадении аккаунтов сообщи пользователю, но не останавливай работу. Сохрани уже работающий вход MCP. ` +
-      (metadata.data.phase === 'verify' ? 'В режиме проверки не переустанавливай метод и не запускай MCP OAuth. ' : '') +
+      (metadata.data.verifyExistingOnly ? 'Проверяй только существующие входы; новый OAuth не запускай. ' : '') +
       `Если MCP недоступен, следуй справке скилла; кабинет и MCP настраиваются отдельно. Компания, Screen и запись файлов проверяются отдельно. ${ACTIVE_ONBOARDING_GUIDANCE} ${workspaceNote}`
   };
   return unsupported;

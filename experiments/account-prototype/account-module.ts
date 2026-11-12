@@ -6,7 +6,7 @@ import { SvaibApi } from './api';
 import { OAuthConnection, productionOAuth, type OAuthEndpoints, type SessionStore } from './oauth';
 import { SvaibMcp } from './mcp';
 import type { Fetcher } from './http';
-import { connectionConfiguration, connectionMetadataSchema, connectionThreadSchema, type ConnectionBinding, BEGIN_TOOL, FRESH_TOOL, WAIT_TOOL, START_TOOL } from './connection';
+import { connectionConfiguration, connectionMetadataSchema, connectionThreadSchema, type ConnectionBinding, BEGIN_TOOL, WAIT_TOOL, START_TOOL } from './connection';
 import { ConnectFlow, flowSchema, startFlowSchema } from './connect-flow';
 import { browserContract } from './browser-contract';
 import { continuationInputSchema } from './continuation';
@@ -68,7 +68,12 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
   flow = new ConnectFlow({ sdk: bb.sdk, kv: bb.storage.kv, pluginId: bb.pluginId,
     account: () => account.view(), begin: () => oauth.begin(), cancel: () => oauth.cancel(), restartPending: epoch => oauth.restartPending(epoch), epoch: () => oauth.epoch, changed,
     open: async (url, hostId, signal) => { await browser.call('openLogin', { url }, { hostId, signal }); },
-    prepareHooks: ctx => reviewHooks(ctx), validateWorkspaceMove: options.validateWorkspaceMove,
+    nativePython: async hostId => {
+      const view = await browser.call('runtimePrepare', {}, { hostId, timeoutMs: 35 * 60_000 });
+      if (view.status !== 'ready' || !view.python) throw new Error(view.message);
+      return { executable: view.python, ...(view.path ? { path: view.path } : {}) };
+    },
+    validateWorkspaceMove: options.validateWorkspaceMove,
     identity: account.workplaceIdentity.bind(account),
   });
   await flow.load();
@@ -86,9 +91,6 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
       if (result.threadId) await bb.sdk.threads.open({ threadId: result.threadId, file: null });
       return JSON.stringify(result);
     } });
-  bb.agents.registerTool({ name: FRESH_TOOL, description: 'Только если после установки или входа MCP-инструменты не появились в текущей сессии, открывает один новый разговор в той же среде. При работающем whoami оставайся здесь. Не выполняет OAuth.', parameters: z.object({ continuation: continuationInputSchema.optional() }).strict(),
-    execute: async ({ continuation }, ctx) => JSON.stringify(await connection.freshVerification(ctx, continuation)),
-  });
   bb.agents.registerTool({ name: WAIT_TOOL, description: 'Ожидает завершение OAuth-процесса без чтения вывода. После завершения проверь MCP здесь; новый разговор автоматически не создаётся.', parameters: z.object({ terminalId: z.string().regex(/^term_[a-z0-9]+$/), continuation: continuationInputSchema.optional() }).strict(),
     execute: async ({ terminalId, continuation }, ctx) => JSON.stringify(await connection.waitForMcp(terminalId, ctx, continuation)),
   });

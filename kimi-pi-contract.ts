@@ -32,6 +32,9 @@ const keyInput = z.object({
   replaceKey: z.boolean().optional(), diagnosticId: z.uuid().optional(),
 }).strict();
 export const kimiPiHostMethods = {
+  kimiPiNativePrerequisites: {
+    input: z.object({ diagnosticId: z.uuid().optional() }).strict(), output: z.null(),
+  },
   kimiPiNativeInspect: { input: z.null(), output: nativePiStatusSchema, experimental_retryable: true },
   kimiPiNativePrepare: { input: keyInput, output: nativePiRegistrationSchema },
   kimiPiInspect: { input: z.null(), output: kimiPiStatusSchema, experimental_retryable: true },
