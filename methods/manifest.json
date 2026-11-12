@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "sourceRevision": "e948b4361096d6bd2168a3e7091c4aa96535a891",
+  "sourceRevision": "40c50600e27d0894aa1075aede3e35eebc599038",
   "method": {
     "root": "methods/common",
     "version": "0.13.0",
@@ -62,13 +62,13 @@
       "plugins/svaib/skills/onboarding/references/kimi-pi-bb.md": "019691c90412214483a8f6f758acb4f114c33ca6ca717cb13bd0c65fc4354a0e",
       "plugins/svaib/skills/onboarding/references/macwhisper-prompt.md": "222824655f58f50d0f9fbd786fb7ce426e1492b0f8220ec6b4713232e6909536",
       "plugins/svaib/skills/onboarding/references/obsidian.md": "147cf5a75608cba616b9668b57484c2bf02536b7bf6e52c1d583477f93b93bc2",
-      "plugins/svaib/skills/onboarding/references/onboarding.md": "bc8810a4b36c4b5a070d872680a90401227c729ca647324e207588437cc54ca0",
+      "plugins/svaib/skills/onboarding/references/onboarding.md": "886dd386c0e18c4c7c031a487d928d04855fab72b98551c6a3cee4e1b80900fe",
       "plugins/svaib/skills/onboarding/references/profile-intake.md": "fa4ef31fcf204557ab76b6b59f00423856fe73635d3bba916934cf379350264a",
       "plugins/svaib/skills/onboarding/references/progress.md": "ed7139a1c46ebb7957ea0a84af64a8a23fad676fe2491c1e7eae502d6f474e19",
       "plugins/svaib/skills/onboarding/references/result-spec.md": "23fb4130fc01d14b785b0ba840a2fa7d7949f98cf92016770eb9385034c49cc6",
       "plugins/svaib/skills/onboarding/references/space-start.md": "8810700587161a5ec22652e4d1d4892e35603dd06221b0e765be9420a115e8d0",
       "plugins/svaib/skills/onboarding/references/stage-actions.md": "2266db9872d745b631efcc1a0924ae7ef18b275a5c1eb7a25d9587e90086b8bb",
-      "plugins/svaib/skills/onboarding/references/stages.json": "8cf8f083282b701994b6abc33e825c01859f650aec3e1d4359eaeaacbb293a21",
+      "plugins/svaib/skills/onboarding/references/stages.json": "51cb45fa1d83f64faad14d4cc9f9dabf759d7558fe79f8b67bdd320f7d5d2fe5",
       "plugins/svaib/skills/onboarding/references/transcription.md": "a4095ebe8db00c8a90db30821ffc42efa587887acd09a46fa6cd380db22a3eca",
       "plugins/svaib/skills/onboarding/references/workplace.md": "2a6ec5309abbf9b132461f28c3a1b5974486070aa5cec7200240154bfeba83aa",
       "plugins/svaib/skills/onboarding/scripts/bind_company.py": "c95e91f298fe64cfa1bb04ff7b9d5915c6c93b8627dd9163e8b25f9753e1be5e",
@@ -242,5 +242,5 @@
       "plugins/svaib/skills/transcript-extract/SKILL.md": "d85a8e7440eb02f1c3073872558b89c45707867c9f96e954f9dbe3077c78868a"
     }
   },
-  "onboardingCatalogSha256": "8cf8f083282b701994b6abc33e825c01859f650aec3e1d4359eaeaacbb293a21"
+  "onboardingCatalogSha256": "51cb45fa1d83f64faad14d4cc9f9dabf759d7558fe79f8b67bdd320f7d5d2fe5"
 }
