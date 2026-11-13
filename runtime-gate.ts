@@ -21,9 +21,14 @@ export function registerRuntimeGate(bb: BbPluginApi) {
   };
   const prepare = (hostId: string, input: { retry?: boolean; portableNode?: boolean } = {}) => {
     const pending = jobs.get(hostId); if (pending) return pending;
-    state.set(hostId, { platform: 'win32', status: 'preparing', step: 'probe', message: 'Подготавливаю Python, Git Bash, Node.js, npm и BB до запуска модели.' });
-    const job = client.call('runtimePrepare', input, { hostId, signal: abort.signal, timeoutMs: 35 * 60_000 })
-      .catch((): RuntimeView => ({ platform: 'win32', status: 'failed', step: 'host', message: 'Подготовка компьютера прервана. Проверь его подключение. Повтор: bb svaib-workplace runtime prepare --retry.' }))
+    const job = (async (): Promise<RuntimeView> => {
+      const { platform } = await inspect(hostId);
+      state.set(hostId, { platform, status: 'preparing', step: 'probe', message: platform === 'win32'
+        ? 'Подготавливаю Python, Git Bash, Node.js, npm и BB до запуска модели.'
+        : 'Проверяю компоненты компьютера.' });
+      try { return await client.call('runtimePrepare', input, { hostId, signal: abort.signal, timeoutMs: 35 * 60_000 }); }
+      catch { return { platform, status: 'failed', step: 'host', message: 'Подготовка компьютера прервана. Проверь его подключение. Повтор: bb svaib-workplace runtime prepare --retry.' }; }
+    })()
       .then(view => { state.set(hostId, view); if (view.status === 'ready') verified.add(hostId); return view; })
       .finally(() => { jobs.delete(hostId); if (state.get(hostId)?.status !== 'preparing') bb.experimental_hooks.recheck('message.dispatch'); });
     jobs.set(hostId, job); return job;

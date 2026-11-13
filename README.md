@@ -2,6 +2,12 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
+## Version 0.8.1
+
+На Mac и Linux после ошибки ручной подготовки сохраняется фактическая платформа: проверка Windows больше не блокирует отправку сообщения.
+
+На Windows ошибка подготовки по-прежнему останавливает запуск модели.
+
 ## Version 0.8.0
 
 На Windows плагин перед запуском модели проверяет Python, Git Bash, Node.js, npm и BB на компьютере исполнения и устанавливает недостающее. Работающие компоненты и входы сохраняются. После отказа или отмены повтор запускается явно; переносимый Node остаётся отдельным выбором.
