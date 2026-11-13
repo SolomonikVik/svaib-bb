@@ -161,8 +161,12 @@ async function prepare(root: string, signal: AbortSignal, options: RuntimePrepar
       await writeFile(join(bin, 'python3.cmd'), '@"%SVAIB_PYTHON%" %*\r\n');
       view.path = [bin, win32.dirname(python.executable), win32.dirname(git.git), win32.dirname(git.bash), win32.dirname(node.executable), variable(env, 'PATH') ?? ''].join(';');
       await step('bb', 'Проверяю CLI текущего BB.');
-      const bb = env.BB_CLI || resolve('bb.cmd') || resolve('bb.exe') || resolve('bb');
-      if (!await probe(bb, ['--version'], /\d+\.\d+\.\d+/)) throw new Error('CLI BB не запускается на компьютере исполнения. Проверь установку BB и повтори подготовку.');
+      // BB_CLI is the JavaScript entry, not necessarily a Windows executable.
+      // The toolchain prefers BB's own launcher, including its Electron setup.
+      const bb = resolve('bb') || env.BB_CLI_LAUNCHER || env.BB_CLI || resolve('bb.cmd') || resolve('bb.exe');
+      const script = bb && (win32.extname(bb) === '' || /\.(?:c|m)?js$/i.test(bb));
+      const version = await probe(script ? node.executable : bb, script ? [bb!, '--version'] : ['--version'], /\d+\.\d+\.\d+/);
+      if (!version) throw new Error('CLI BB не запускается на компьютере исполнения. Проверь установку BB и повтори подготовку.');
     }
     view = { ...view, status: 'ready', step: 'ready', message: 'Компьютер подготовлен. Рабочие профили и входы сохранены.' }; await save(); return view;
   } catch (error) {

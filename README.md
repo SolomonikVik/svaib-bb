@@ -2,6 +2,12 @@
 
 Connect the svaib account and work with the management-space structure in BB Desktop. Requires BB 0.48.1 or later with compatible Plugin SDK 0.6.104 or later in the 0.6 line. A Codex, Claude Code or Pi model connection and a svaib account are configured separately.
 
+## Version 0.8.2
+
+Исправлена проверка BB CLI на Windows: подготовка больше не пытается запустить JavaScript-файл `BB_CLI` как исполняемый файл. Используется штатный launcher BB, а при его отсутствии — проверенный Node.js.
+
+После обновления повтори `bb svaib-workplace runtime prepare --retry`, затем запуск разговора или проверку Kimi. Готовая подготовка передаёт агенту PATH с обёрткой `python3` для хуков. В комплекте остаётся Harness 0.14.0.
+
 ## Version 0.8.1
 
 На Mac и Linux после ошибки ручной подготовки сохраняется фактическая платформа: проверка Windows больше не блокирует отправку сообщения.
