@@ -158,7 +158,15 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         if (!current.installed) {
           await hostMutation('prepare', 'setup', diagnosticId => client.call('kimiPiNativePrerequisites', { diagnosticId }, target()));
           await pi.installNative();
+          // Installation can finish before the refreshed host PATH exposes Pi.
+          // Recheck the executable for a bounded period; never start a second
+          // installer or treat the npm package alone as a working CLI.
+          const readyDeadline = Date.now() + 75_000;
           current = await client.call('kimiPiNativeInspect', null, target());
+          while (!disposed && !current.installed && current.profile !== 'blocked' && Date.now() < readyDeadline) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            current = await client.call('kimiPiNativeInspect', null, target());
+          }
           if (!current.installed || current.profile === 'blocked') throw new Error('PI_NATIVE_INSTALL_FAILED');
         }
         if (!apiKey && !current.hasCredential && !environmentCredential) {
@@ -307,6 +315,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     let operation: 'host-inspect' | 'settings-read' | 'provider-models' = 'host-inspect';
     try {
       if (isPi) {
+        operation = 'provider-models';
         const query = { hostId, providerId: 'pi', preferCached: false, signal: abort.signal };
         // BB0.48.1 first returns a cached empty catalog while its refresh runs.
         // Keep the visible step active instead of asking for another install/key.
@@ -314,9 +323,16 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         const deadline = Date.now() + (nativePi && waitForNativeRefresh ? 75_000 : 15_000);
         for (let attempt = 0; attempt < attempts && Date.now() < deadline; attempt++) {
           if (disposed) return null;
-          const catalog = await bounded(bb.sdk.providers.models(query), Math.min(8000, deadline - Date.now()));
-          const available = !catalog.modelLoadError && catalog.providers.some(provider => provider.id === 'pi' && provider.available);
-          const models = available ? catalog.models.filter(model => model.id.startsWith('kimi-coding/')) : [];
+          let catalog: Awaited<ReturnType<typeof bb.sdk.providers.models>> | null = null;
+          try { catalog = await bounded(bb.sdk.providers.models(query), Math.min(8000, deadline - Date.now())); }
+          catch (error) {
+            // A cold discovery can outlive one lookup while BB refreshes its
+            // catalogue. Keep the remaining native setup budget available.
+            if (!nativePi || !waitForNativeRefresh || !(error instanceof Error)
+              || error.message !== 'BB timeout' && error.name !== 'TimeoutError') throw error;
+          }
+          const available = catalog && !catalog.modelLoadError && catalog.providers.some(provider => provider.id === 'pi' && provider.available);
+          const models = available && catalog ? catalog.models.filter(model => model.id.startsWith('kimi-coding/')) : [];
           const model = (models.find(model => model.id === 'kimi-coding/k3.1-pro') ?? models.find(model => model.isDefault) ?? models[0])?.id;
           if (model) { log('bb-discovery', 'success', { modelCount: models.length, elapsedMs: Date.now() - started }); return model; }
           if (attempt < attempts - 1) await new Promise<void>(resolve => {
@@ -558,11 +574,12 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       if (checking) { watchAutomaticCheck(candidate); return; }
       checking = true;
       try {
-        await checkResponse(true);
+        const progress = { settling: false };
+        await checkResponse(true, progress);
         if (!currentAttempt(candidate)) return;
         const thread = await checkedThread(candidate.threadId!, false);
         if (!currentAttempt(candidate)) return;
-        if (thread.status === 'error' || thread.status === 'idle' || Date.now() - candidate.startedAt > 240_000) {
+        if (thread.status === 'error' || thread.status === 'idle' && !progress.settling || Date.now() - candidate.startedAt > 240_000) {
           await failAutomaticCheck('Kimi не подтвердила проверочный ответ. Проверь ключ и доступ к модели, затем повтори проверку.', candidate); return;
         }
       } catch {
@@ -589,7 +606,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         if (!currentAttempt(candidate)) return;
         if (!personal) throw new Error('personal-project-unavailable');
         const thread = await bounded(bb.sdk.threads.spawn({
-          projectId: personal.id, providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: 'accept-edits',
+          projectId: personal.id, providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: isPi ? 'full' : 'accept-edits',
           title: 'Проверка Kimi', visibility: 'hidden',
           environment: { type: 'host', hostId, workspace: { type: 'personal' } },
           input: [{ type: 'text', text: 'Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы.', mentions: [] }],
@@ -621,17 +638,26 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     verificationStart = run().finally(() => { verificationStart = null; });
     return verificationStart;
   }
-  async function checkResponse(quiet = false) {
+  async function checkResponse(quiet = false, progress?: { settling: boolean }) {
     const candidate = attempt;
     const testId = candidate?.threadId;
     const current = () => !replacing && !!candidate && currentAttempt(candidate) && view.stage === 'verify';
-    const pending = (message: string) => quiet || !current() ? Promise.resolve(snapshot()) : save({ message });
+    const pending = (message: string, settling = false) => {
+      if (progress && settling) progress.settling = true;
+      return quiet || !current() ? Promise.resolve(snapshot()) : save({ message });
+    };
     if (!candidate || !testId) return pending('Начни новую проверку Kimi.');
     try {
       const thread = await checkedThread(testId);
-      if (thread.status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.');
-      const lastPiRequest = async () => (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
-        types: ['client/thread/start', 'client/turn/start', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+      if (thread.status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.', true);
+      const lastPiRequest = async () => {
+        // BB records resolved execution separately; the wire-level start can
+        // legitimately have empty params. Keep the legacy event path as fallback.
+        const resolved = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+          types: ['client/turn/requested', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+        return resolved ?? (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+          types: ['client/thread/start', 'client/turn/start', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+      };
       let sentIdentity: { id: string; seq: number } | null = null;
       if (isPi) {
         // Read the model that was sent, not mutable composer defaults or a
@@ -639,33 +665,46 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         const sent = await lastPiRequest();
         const request = sent && (sent.type === 'client/thread/start' || sent.type === 'client/turn/start') ? sent.data.request : null;
         const options = request?.params.options;
-        const model = options && typeof options === 'object' && !Array.isArray(options) && 'model' in options ? options.model : null;
+        const model = sent?.type === 'client/turn/requested' ? sent.data.execution.model
+          : options && typeof options === 'object' && !Array.isArray(options) && 'model' in options ? options.model : null;
         if (model !== candidate.model) {
-          return pending('Для проверки выбери указанную модель Kimi в Pi и отправь новый проверочный запрос.');
+          return pending('Для проверки выбери указанную модель Kimi в Pi и отправь новый проверочный запрос.', !sent);
+        }
+        if (sent?.type === 'client/turn/requested') {
+          const accepted = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+            types: ['turn/input/accepted'], order: 'desc', limit: '1' })))[0];
+          const completed = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+            types: ['turn/completed'], order: 'desc', limit: '1' })))[0];
+          if (accepted?.type !== 'turn/input/accepted' || completed?.type !== 'turn/completed'
+            || accepted.data.clientRequestId !== sent.data.requestId
+            || !('turnId' in accepted.scope) || !('turnId' in completed.scope)
+            || accepted.scope.turnId !== completed.scope.turnId || completed.data.status !== 'completed') {
+            return pending('Проверочный запрос ещё не подтверждён завершённым ходом Pi.', true);
+          }
         }
         sentIdentity = { id: sent!.id, seq: sent!.seq };
         // A turn may have started between the first status and event reads.
-        if ((await checkedThread(thread.id)).status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.');
+        if ((await checkedThread(thread.id)).status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.', true);
       }
       const { output } = await bounded(bb.sdk.threads.output({ threadId: thread.id }));
       if (sentIdentity) {
         const after = await checkedThread(thread.id);
         const latest = await lastPiRequest();
         if (after.status !== 'idle' || latest?.id !== sentIdentity.id || latest?.seq !== sentIdentity.seq) {
-          return pending('Проверочный разговор изменился. Дождись ответа и повтори проверку.');
+          return pending('Проверочный разговор изменился. Дождись ответа и повтори проверку.', true);
         }
       }
       if (!current()) return snapshot();
       if (output?.trim() !== 'KIMI_READY') {
         if (!quiet) log('verification', 'failure', { reason: 'wrong-response' });
-        return pending('Проверочный ответ не подтверждён. Открой разговор и проверь результат.');
+        return pending('Проверочный ответ не подтверждён. Открой разговор и проверь результат.', !output?.trim());
       }
       log('verification', 'success', { elapsedMs: Date.now() - candidate.startedAt });
       attempt = null;
       await save({ stage: 'complete', hidden: true, phase: null, testThreadId: null, ownedTestThreadId: null, checkToken: null, checkStartedAt: null, stopUnconfirmed: false, message: 'Готово к работе', manualRegistration: null });
       void cleanupOwnedCheck(testId).catch(() => {});
       return snapshot();
-    } catch { return pending('Не удалось проверить ответ. Открой разговор Kimi и повтори.'); }
+    } catch { return pending('Не удалось проверить ответ. Открой разговор Kimi и повтори.', true); }
   }
   bb.events.on('thread.idle', async ({ thread }) => {
     if (!disposed && !view.hidden && view.stage === 'verify' && thread.id === view.testThreadId) await checkResponse();
