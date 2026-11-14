@@ -11,3 +11,5 @@ export function resumeProvision(options: { root: string; install?: Install; npmC
 export const MODELS: string[][];
 export function upgradeProvision(root: string, options?: DiscoveryOptions & { restrictContext?: boolean }): Promise<KimiAgent>;
 export function validateProvision(root: string): Promise<{ catalog: { models: { id: string; context: number; retired: boolean }[] } }>;
+
+export function repairProvision(root: string, options?: DiscoveryOptions & { nodeExecutable?: string; apiKey?: string }): Promise<KimiAgent>;

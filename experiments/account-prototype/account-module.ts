@@ -69,7 +69,7 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
     account: () => account.view(), begin: () => oauth.begin(), cancel: () => oauth.cancel(), restartPending: epoch => oauth.restartPending(epoch), epoch: () => oauth.epoch, changed,
     open: async (url, hostId, signal) => { await browser.call('openLogin', { url }, { hostId, signal }); },
     nativePython: async hostId => {
-      const view = await browser.call('runtimePrepare', {}, { hostId, timeoutMs: 35 * 60_000 });
+      const view = await browser.call('runtimePrepare', { context: { provider: 'codex', action: 'setup', hooks: true }, retry: true }, { hostId, timeoutMs: 35 * 60_000 });
       if (view.status !== 'ready' || !view.python) throw new Error(view.message);
       return { executable: view.python, ...(view.path ? { path: view.path } : {}) };
     },

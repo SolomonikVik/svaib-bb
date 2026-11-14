@@ -3,13 +3,13 @@ import { experimental_defineHostEntry } from '@get-bb/plugin-sdk/host';
 import { browserContract } from './browser-contract';
 import { nativeHookAutomatic } from './hook-native';
 import { join } from 'node:path';
-import { inspectKimi, prepareKimi, replaceKimiKey } from '../../kimi-host';
+import { inspectKimi, prepareKimi, refreshKimiCatalog, replaceKimiKey } from '../../kimi-host';
 import { inspectKimiPi, prepareKimiPi } from '../../kimi-pi-host';
 import { inspectNativeKimiPi, prepareNativeKimiPi } from '../../kimi-pi-native';
 import { randomUUID } from 'node:crypto';
 import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep } from '../../kimi-diagnostics';
 import { logKimiRuntime } from '../../kimi-runtime-diagnostics';
-import { ensureWindowsNode } from '../../windows-node';
+import { prepareKimiRuntime } from '../../kimi-runtime-preparation';
 import { inspectRuntime, prepareRuntime, cancelRuntime } from '../../runtime-preparation';
 import { runtimeSignals } from '../../runtime-contract';
 
@@ -17,13 +17,16 @@ import { runtimeSignals } from '../../runtime-contract';
 export default experimental_defineHostEntry({ contract: browserContract, experimental_signals: { ...kimiDiagnosticSignals, ...runtimeSignals }, handlers: {
   async runtimePrepare(input, context) {
     return prepareRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation'), context.signal, { ...input,
-      progress: ({ platform, status, step, message }) => context.experimental_emitSignal('runtimeProgress', { platform, status, step, message }) });
+      progress: ({ platform, status, step, message, context: scope }) => context.experimental_emitSignal('runtimeProgress', { platform, status, step, message, context: scope }) });
   },
-  async runtimeInspect(_, context) { return inspectRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation')); },
+  async runtimeInspect(input, context) { return inspectRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation'), input, context.signal); },
   async runtimeCancel(_, context) { return cancelRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation')); },
-  async kimiPiNativePrerequisites({ diagnosticId }, context) {
-    const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
-    await ensureWindowsNode(context.signal, log);
+  async kimiPiNativePrerequisites(_, context) {
+    const result = await prepareRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation'), context.signal, {
+      context: { provider: 'pi', action: 'install', hooks: true },
+      progress: ({ platform, status, step, message, context: scope }) => context.experimental_emitSignal('runtimeProgress', { platform, status, step, message, context: scope }),
+    });
+    if (result.status !== 'ready') throw new Error(result.message);
     return null;
   },
   async kimiPiNativeInspect(_, context) { return inspectNativeKimiPi(join(context.experimental_paths.dataDir, 'kimi-pi-native'), context.signal); },
@@ -42,8 +45,16 @@ export default experimental_defineHostEntry({ contract: browserContract, experim
   async kimiPrepare({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
     const root = join(context.experimental_paths.dataDir, 'kimi-cc');
-    try { return await kimiStep(log, 'prepare', () => prepareKimi(root, apiKey, context.signal, log)); }
+    try { return await kimiStep(log, 'prepare', () => prepareKimi(root, apiKey, context.signal, log, {
+      ensureRuntime: (profileRoot, signal) => prepareKimiRuntime(join(context.experimental_paths.dataDir, 'runtime-preparation'), profileRoot, signal, {
+        progress: ({ platform, status, step, message, context: scope }) => context.experimental_emitSignal('runtimeProgress', { platform, status, step, message, context: scope }),
+      }),
+    })); }
     catch (error) { await logKimiRuntime(root, context.signal, log); throw error; }
+  },
+  async kimiRefreshCatalog({ diagnosticId }, context) {
+    const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));
+    return refreshKimiCatalog(join(context.experimental_paths.dataDir, 'kimi-cc'), context.signal, log);
   },
   async kimiReplaceKey({ apiKey, diagnosticId }, context) {
     const log = kimiDiagnostics(diagnosticId ?? randomUUID(), 'host', event => context.experimental_emitSignal('kimiDiagnostic', event));

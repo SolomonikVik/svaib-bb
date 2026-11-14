@@ -116,8 +116,11 @@ export async function ensureWindowsNode(signal: AbortSignal, log: KimiDiagnostic
           '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'],
         signal, { timeoutMs: 10 * 60_000, pulse }));
     } catch (error) {
+      // Cancellation has its own signal.reason, but an unconfirmed child stop
+      // belongs to the runner error. Preserve that fence before checking abort.
+      if ((error as { cleanupPending?: boolean }).cleanupPending) throw error;
       signal.throwIfAborted();
-      if ((error as Error).name === 'TimeoutError' || (error as { cleanupPending?: boolean }).cleanupPending) throw error;
+      if ((error as Error).name === 'TimeoutError') throw error;
       // Process launch failures may use the portable fallback; actual probes decide success.
     }
     signal.throwIfAborted();

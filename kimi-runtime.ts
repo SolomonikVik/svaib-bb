@@ -4,13 +4,13 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'n
 import { dirname, join, win32 } from 'node:path';
 import { kimiErrorFields, type KimiDiagnosticLog } from './kimi-diagnostics';
 import { experimental_hostToolchain as toolchain } from '@get-bb/plugin-sdk/process';
-import { discoverWindowsNode, ensureWindowsNode } from './windows-node';
+import { discoverWindowsNode } from './windows-node';
 
 const VERSION = '22.23.4';
 const jobs = new Map<string, Promise<KimiRuntime>>();
 export type KimiRuntime = { executable: string; npmCli: string; version: string };
 
-async function probe(executable: string, signal: AbortSignal): Promise<string | null> {
+export async function probeKimiNode(executable: string, signal: AbortSignal): Promise<string | null> {
   return new Promise(resolve => {
     const child = spawn(executable, ['-p', 'JSON.stringify({version:process.versions.node,electron:!!process.versions.electron})'],
       { signal, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -37,7 +37,7 @@ export async function existingKimiRuntime(signal: AbortSignal): Promise<KimiRunt
   try {
     const pair = toolchain.npmCli();
     if (pair) {
-      const version = await probe(pair.node, signal);
+      const version = await probeKimiNode(pair.node, signal);
       if (version) return { executable: pair.node, npmCli: pair.cli, version };
     }
   } catch { /* A desktop Electron runtime is not necessarily a standalone Node. */ }
@@ -111,11 +111,21 @@ async function managedRuntime(parent: string, signal: AbortSignal, log: KimiDiag
     await regular(join(target, 'runtime-owner.json')); await regular(join(target, spec.executable)); await regular(join(target, spec.npm));
     const owner = JSON.parse(await readFile(join(target, 'runtime-owner.json'), 'utf8'));
     if (owner.version !== VERSION || owner.archive !== spec.file || owner.nodeSha256 !== createHash('sha256').update(await readFile(join(target, spec.executable))).digest('hex')) throw new Error('Собственный runtime Node.js изменён. Ничего не перезаписано.');
-    const version = await probe(join(target, spec.executable), signal);
+    const version = await probeKimiNode(join(target, spec.executable), signal);
     if (!version) throw new Error('Не удалось запустить подготовленный Node.js. Повтори установку.');
     return { executable: join(target, spec.executable), npmCli: join(target, spec.npm), version };
   }
-  const current = await saved(); if (current) return current;
+  let previous: string | null = null;
+  try { const current = await saved(); if (current) return current; }
+  catch (error) {
+    signal.throwIfAborted();
+    // Only a valid marker authorizes rebuilding our generated runtime. Foreign
+    // directories and links are preserved, including failed initial downloads.
+    await regular(target, true); await regular(join(target, 'runtime-owner.json'));
+    const owner = JSON.parse(await readFile(join(target, 'runtime-owner.json'), 'utf8'));
+    if (owner.version !== VERSION || owner.archive !== spec.file || !/^[a-f0-9]{64}$/.test(owner.nodeSha256)) throw error;
+    previous = join(base, '.before-repair-' + Date.now() + '-' + process.pid);
+  }
   const temp = await mkdtemp(join(base, '.prepare-'));
   try {
     const origin = `https://nodejs.org/dist/v${VERSION}/`;
@@ -133,9 +143,12 @@ async function managedRuntime(parent: string, signal: AbortSignal, log: KimiDiag
     });
     const prepared = join(temp, spec.directory); await regular(prepared, true); await regular(join(prepared, spec.executable)); await regular(join(prepared, spec.npm));
     if (process.platform !== 'win32') await chmod(join(prepared, spec.executable), 0o700);
-    if (!await probe(join(prepared, spec.executable), signal)) throw new Error('Скачанный Node.js не запускается на этом компьютере.');
+    if (!await probeKimiNode(join(prepared, spec.executable), signal)) throw new Error('Скачанный Node.js не запускается на этом компьютере.');
     await writeFile(join(prepared, 'runtime-owner.json'), JSON.stringify({ version: VERSION, archive: spec.file, nodeSha256: createHash('sha256').update(await readFile(join(prepared, spec.executable))).digest('hex') }), { flag: 'wx', mode: 0o600 });
-    await rename(prepared, target);
+    signal.throwIfAborted();
+    if (previous) await rename(target, previous);
+    try { await rename(prepared, target); }
+    catch (error) { if (previous) await rename(previous, target); throw error; }
     return (await saved())!;
   } finally { await rm(temp, { recursive: true, force: true }); }
 }
@@ -143,7 +156,7 @@ async function managedRuntime(parent: string, signal: AbortSignal, log: KimiDiag
 export async function ensureKimiRuntime(profileRoot: string, signal: AbortSignal, options: { forceManaged?: boolean; log?: KimiDiagnosticLog } = {}) {
   const log = options.log ?? (() => {});
   if (!options.forceManaged) {
-    const ready = process.platform === 'win32' ? await ensureWindowsNode(signal, log) : await existingKimiRuntime(signal);
+    const ready = await existingKimiRuntime(signal);
     if (ready) return ready;
   }
   const parent = dirname(profileRoot);

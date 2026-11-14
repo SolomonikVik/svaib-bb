@@ -112,27 +112,30 @@ async function readOwner(root: string): Promise<Owner | null> {
   return parsed.data;
 }
 async function validate(root: string, owner: Owner) {
-  if (owner.launcherHash !== digest(launcher(root, owner.nodeExecutable)) || owner.modelsHash !== digest(models)) throw changed();
-  if (await nodeHash(owner.nodeExecutable) !== owner.nodeHash) throw changed();
+  if (owner.launcherHash !== digest(launcher(root, owner.nodeExecutable))) throw changed();
   let complete = true;
+  if (!await regular(owner.nodeExecutable, false, 256 * 1024 * 1024) || await nodeHash(owner.nodeExecutable) !== owner.nodeHash) complete = false;
   if (await regular(agentDir(root), true)) {
     for (const [path, expected] of [[join(root, 'launch.mjs'), owner.launcherHash], [join(agentDir(root), 'models.json'), owner.modelsHash]]) {
       const actual = await fileHash(path);
       if (actual === null) complete = false;
-      else if (actual !== expected) throw changed();
+      else if (actual !== expected) complete = false;
     }
   } else complete = false;
   const authHash = await fileHash(join(agentDir(root), 'auth.json'));
-  if (authHash !== null && authHash !== owner.authHash && authHash !== owner.pendingAuthHash) throw changed();
+  if (authHash !== null && authHash !== owner.authHash && authHash !== owner.pendingAuthHash) {
+    const auth = JSON.parse(await readFile(join(agentDir(root), 'auth.json'), 'utf8'));
+    if (!auth || typeof auth !== 'object' || Array.isArray(auth) || auth['kimi-coding']?.type !== 'api_key' || typeof auth['kimi-coding'].key !== 'string') throw changed();
+    complete = false;
+  }
   const pendingCommitted = owner.pendingAuthHash !== undefined && authHash === owner.pendingAuthHash;
   const needsKey = authHash === null || owner.pendingAuthHash !== undefined && !pendingCommitted;
   let runtimeComplete = false;
   if (owner.runtime) {
     const cliHash = await fileHash(kimiPiCli(root), 128 * 1024 * 1024);
     const packageHash = await fileHash(packagePath(root));
-    if (cliHash !== null && cliHash !== owner.runtime.cliHash || packageHash !== null && packageHash !== owner.runtime.packageHash) throw changed();
-    runtimeComplete = cliHash !== null && packageHash !== null;
-  } else if (await regular(join(root, 'runtime'), true) && (await readdir(join(root, 'runtime'))).length) throw changed();
+    runtimeComplete = cliHash === owner.runtime.cliHash && packageHash === owner.runtime.packageHash;
+  }
   return { complete: complete && runtimeComplete && !needsKey && !owner.pendingAuthHash, needsKey, pendingCommitted, runtimeComplete };
 }
 
@@ -216,7 +219,8 @@ export async function prepareKimiPi(root: string, apiKey: string | undefined, si
         nodeHash: await nodeHash(runtime.executable), launcherHash: digest(launcher(root, runtime.executable)), modelsHash: digest(models), authHash: null, runtime: null };
       await privateWrite(ownerPath(root), json(owner));
     } else {
-      if (runtime.executable !== owner.nodeExecutable) throw changed();
+      owner.nodeExecutable = runtime.executable; owner.nodeHash = await nodeHash(runtime.executable);
+      owner.launcherHash = digest(launcher(root, runtime.executable));
       const result = await validate(root, owner);
       if (result.pendingCommitted) {
         owner.authHash = owner.pendingAuthHash!; delete owner.pendingAuthHash;
@@ -225,12 +229,30 @@ export async function prepareKimiPi(root: string, apiKey: string | undefined, si
     }
     signal.throwIfAborted();
     if (!await regular(agentDir(root), true)) await mkdir(agentDir(root), { mode: 0o700 });
-    if (!await regular(join(root, 'launch.mjs'))) await privateWrite(join(root, 'launch.mjs'), launcher(root, runtime.executable));
-    if (!await regular(join(agentDir(root), 'models.json'))) await privateWrite(join(agentDir(root), 'models.json'), models);
+    // Marker-owned generated files may be repaired; native settings and auth remain.
+    await regular(join(root, 'launch.mjs'));
+    await privateWrite(join(root, 'launch.mjs'), launcher(root, runtime.executable));
+    const modelsPath = join(agentDir(root), 'models.json');
+    let currentModels: Record<string, any> = {};
+    if (await regular(modelsPath)) {
+      try { currentModels = JSON.parse(await readFile(modelsPath, 'utf8')); } catch {
+        await privateWrite(modelsPath + '.before-repair-' + randomUUID(), await readFile(modelsPath, 'utf8'));
+      }
+    }
+    if (!currentModels || typeof currentModels !== 'object' || Array.isArray(currentModels)) currentModels = {};
+    const repairedModels = json({ ...currentModels, providers: { ...currentModels.providers, 'kimi-coding': {
+      ...(currentModels.providers?.['kimi-coding'] ?? {}), baseUrl: 'https://api.kimi.ai/coding/v1' } } });
+    await privateWrite(modelsPath, repairedModels);
+    owner.modelsHash = digest(repairedModels);
+    const existingAuthHash = await fileHash(join(agentDir(root), 'auth.json'));
+    if (!apiKey && existingAuthHash !== null) owner.authHash = existingAuthHash;
+    await privateWrite(ownerPath(root), json(owner));
     if (apiKey) {
       // Journal expected bytes before replacing auth, then finish even if the caller disconnects.
       // A killed process is recovered by comparing the two known hashes, never by printing auth.
-      const auth = json({ 'kimi-coding': { type: 'api_key', key: apiKey } }); apiKey = undefined;
+      const authPath = join(agentDir(root), 'auth.json');
+      const previousAuth = await regular(authPath) ? JSON.parse(await readFile(authPath, 'utf8')) : {};
+      const auth = json({ ...previousAuth, 'kimi-coding': { type: 'api_key', key: apiKey } }); apiKey = undefined;
       owner.pendingAuthHash = digest(auth);
       await privateWrite(ownerPath(root), json(owner));
       await privateWrite(join(agentDir(root), 'auth.json'), auth);

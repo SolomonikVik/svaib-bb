@@ -24,7 +24,7 @@ export const nativePiRegistrationSchema = z.object({
 export type NativePiRegistration = z.infer<typeof nativePiRegistrationSchema>;
 export const nativePiStatusSchema = z.object({
   installed: z.boolean(), registration: nativePiRegistrationSchema.nullable(),
-  profile: z.enum(['absent', 'ready', 'blocked']), hasCredential: z.boolean(), canReplaceKey: z.boolean(),
+  profile: z.enum(['absent', 'ready', 'blocked']), hasCredential: z.boolean(), canReplaceKey: z.boolean(), needsRepair: z.boolean().optional(),
 }).strict();
 export type NativePiStatus = z.infer<typeof nativePiStatusSchema>;
 const keyInput = z.object({

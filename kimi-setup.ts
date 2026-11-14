@@ -16,17 +16,12 @@ async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
 }
 
 /** Owns only local Kimi UI state. It never reads/writes svaib onboarding marks. */
-async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 'claude-code' | 'pi', pi: Awaited<ReturnType<typeof createKimiPiSupport>>, piMode: 'native' | 'managed' = 'native', resume = true) {
+async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 'claude-code' | 'pi', pi: Awaited<ReturnType<typeof createKimiPiSupport>>, diagnostics: { write: (event: KimiDiagnostic) => void; routes: Map<string, (event: KimiDiagnostic) => void> }, piMode: 'native' | 'managed' = 'native') {
   const isPi = harness === 'pi';
   const nativePi = isPi && piMode === 'native';
   const PROVIDER = isPi ? 'pi' : 'acp-claude-kimi';
   const client = bb.hosts.experimental_client({ contract: browserContract, experimental_signals: kimiDiagnosticSignals });
-  const writeDiagnostic = (event: KimiDiagnostic) => {
-    const line = '[kimi] ' + JSON.stringify(event);
-    try {
-      if (event.outcome === 'failure' || event.outcome === 'fallback') bb.log.warn(line); else bb.log.info(line);
-    } catch { /* Host signal delivery must also survive a failed log sink. */ }
-  };
+  const writeDiagnostic = diagnostics.write;
   const log = kimiDiagnostics(randomUUID(), 'backend', writeDiagnostic);
   let environmentSnapshot: Promise<void> | undefined;
   function logEnvironment() {
@@ -44,13 +39,10 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     ]).then(() => {});
   }
   let activePreparation: string | null = null;
-  bb.onDispose(client.experimental_onSignal('kimiDiagnostic', event => {
-    if (event.hostId !== hostId) return;
-    const entry = event.payload;
-    writeDiagnostic(entry);
+  const receiveProgress = (entry: KimiDiagnostic) => {
     if (entry.diagnosticId !== activePreparation || view.stage !== 'installing' || view.phase !== 'components') return;
     if (!['runtime-install', 'runtime-download', 'adapter-install', 'runtime-probe'].includes(entry.step) || !['start', 'progress', 'success', 'fallback'].includes(entry.outcome)) return;
-    // Ephemeral progress never races persisted state writes; a reload resumes the operation.
+    // Progress belongs only to the current explicit operation.
     view = { ...view, revision: view.revision + 1, installProgress: {
       step: entry.step as 'runtime-install' | 'runtime-download' | 'adapter-install' | 'runtime-probe',
       ...(entry.runtimeKind ? { runtimeKind: entry.runtimeKind } : {}),
@@ -60,12 +52,23 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       ...(entry.totalBytes ? { totalBytes: entry.totalBytes } : {}),
     } };
     bb.realtime.publish('kimi-setup-changed', null);
-  }));
+  };
   const storageKey = (nativePi ? 'kimi-pi-native-setup:v1:' : isPi ? 'kimi-pi-setup:v1:' : 'kimi-setup:v1:') + (hostId ?? 'unavailable');
   const saved = kimiViewSchema.safeParse(await bb.storage.kv.get(storageKey));
-  let view: KimiView = saved.success ? { ...saved.data, harness, piMode, installProgress: null } : {
-    harness, piMode, revision: 0, canReplaceKey: false, hidden: false, stage: 'intro', message: '', hostId: hostId ?? '', testThreadId: null, verifyModel: null, manualRegistration: null, keyChangedAt: null,
-    phase: null, startedAt: null, checkToken: null, checkStartedAt: null, catalogVersion: 0, catalogCheckedAt: null, automatic: false, ownedTestThreadId: null,
+  // Saved check IDs and phases are legacy cleanup candidates, never resumable work.
+  const legacyCleanup = saved.success ? saved.data.ownedTestThreadId ?? saved.data.testThreadId : null;
+  let view: KimiView = {
+    harness, piMode, revision: saved.success ? saved.data.revision : 0,
+    canReplaceKey: saved.success ? saved.data.canReplaceKey : false,
+    registrationGeneration: saved.success ? saved.data.registrationGeneration ?? null : null,
+    stopUnconfirmed: saved.success ? saved.data.stopUnconfirmed ?? saved.data.phase === 'check' : false,
+    hidden: saved.success ? saved.data.hidden : false, stage: 'intro', message: saved.success && saved.data.stopUnconfirmed ? 'Предыдущий запрос мог продолжиться: BB не подтвердил остановку. Следующее нажатие «Повторить» создаст один новый запрос.' : '', hostId: hostId ?? '',
+    testThreadId: null, verifyModel: null, manualRegistration: saved.success ? saved.data.manualRegistration : null,
+    keyChangedAt: saved.success ? saved.data.keyChangedAt : null, phase: null, startedAt: null,
+    checkToken: null, checkStartedAt: null, automatic: false, ownedTestThreadId: null,
+    catalogVersion: saved.success ? saved.data.catalogVersion : 0,
+    catalogCheckedAt: saved.success ? saved.data.catalogCheckedAt : null,
+    installProgress: null,
   };
   let job: Promise<void> | null = null;
   let starting: Promise<KimiView> | null = null;
@@ -74,14 +77,24 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   const abort = new AbortController();
   let verificationTimer: ReturnType<typeof setTimeout> | null = null;
   let checking = false;
-  bb.onDispose(() => { disposed = true; abort.abort(); if (verificationTimer) clearTimeout(verificationTimer); });
+  type Attempt = { nonce: string; generation: number; keyVersion: number | null; startedAt: number; model: string; threadId: string | null };
+  let generation = 0;
+  let attempt: Attempt | null = null;
+  let verificationStart: Promise<void> | null = null;
+  let stopWarning = '';
+  let legacySwept = false;
+  bb.onDispose(async () => { const previous = attempt; attempt = null; disposed = true; abort.abort(); if (verificationTimer) clearTimeout(verificationTimer);
+    if (previous?.threadId) await cleanupOwnedCheck(previous.threadId).catch(() => {}); });
   const occupied = () => !!job || !!starting || replacing;
-  const snapshot = () => ({ ...view });
+  const snapshot = () => {
+    const warning = 'Предыдущий запрос мог продолжиться: BB не подтвердил остановку. Следующее нажатие «Повторить» создаст один новый запрос.';
+    return { ...view, ...(!attempt && view.stopUnconfirmed ? { message: view.message.includes('мог продолжиться') || !view.message ? warning : `${view.message} ${warning}` } : {}) };
+  };
   async function save(patch: Partial<KimiView>) {
     if (disposed) return snapshot();
     const changed = patch.stage !== undefined && patch.stage !== view.stage || patch.phase !== undefined && patch.phase !== view.phase;
     view = { ...view, ...(patch.phase !== undefined || patch.stage !== undefined ? { installProgress: null } : {}), ...patch, revision: view.revision + 1 };
-    await bb.storage.kv.set(storageKey, view);
+    await bb.storage.kv.set(storageKey, { ...view, stage: 'intro', phase: null, startedAt: null, automatic: false, testThreadId: null, ownedTestThreadId: null, checkToken: null, checkStartedAt: null, installProgress: null });
     if (changed) log('state', 'success', { stage: view.stage, phase: view.phase });
     bb.realtime.publish('kimi-setup-changed', null);
     return snapshot();
@@ -96,10 +109,10 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     operationLog(step, 'start', { reason });
     await logEnvironment();
     const started = Date.now();
-    activePreparation = diagnosticId;
+    activePreparation = diagnosticId; diagnostics.routes.set(diagnosticId, receiveProgress);
     try { const result = await work(diagnosticId); operationLog(step, 'success', { elapsedMs: Date.now() - started }); return result; }
     catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
-    finally { if (activePreparation === diagnosticId) activePreparation = null; }
+    finally { diagnostics.routes.delete(diagnosticId); if (activePreparation === diagnosticId) activePreparation = null; }
   }
   const prepareProfile = (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => hostMutation('prepare', reason,
     diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
@@ -122,6 +135,8 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       message: 'Не удалось безопасно продолжить с этим Pi или его профилем. Помощник проверит версию, запуск и настройки; существующие файлы сохранены.' });
     if (!status.installed) return save({ stage: 'registration', phase: null, canReplaceKey: false, automatic: false,
       message: 'Сначала установим штатный Pi через BB на этом компьютере. Затем карточка запросит ключ Kimi Code.' });
+    if (status.needsRepair) return save({ stage: 'registration', phase: null, verifyModel: null, canReplaceKey: status.canReplaceKey, automatic: false,
+      message: 'Настройки Kimi в собственном профиле Pi повреждены или не завершены. Нажми «Продолжить настройку»: восстановим подключение с сохранением действующего входа и других настроек.' });
     if (status.hasCredential || await pi.nativeEnvironmentCredential()) {
       const verifyModel = await resolveVerifyModel();
       return save({ stage: 'verify', phase: null, verifyModel, canReplaceKey: status.canReplaceKey,
@@ -150,7 +165,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
           await save({ stage: 'key', phase: null, automatic: false, message: 'Pi установлен. Введи ключ Kimi Code.' }); return;
         }
         await save({ phase: 'access' });
-        if (!environmentCredential) await prepareNativePi(apiKey);
+        if (!environmentCredential || current.needsRepair) await prepareNativePi(apiKey);
         apiKey = undefined;
         current = await client.call('kimiPiNativeInspect', null, target());
         const verifyModel = await resolveVerifyModel(true);
@@ -168,11 +183,11 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (!view.canReplaceKey || occupied()) throw new Error('Ключ не принадлежит настройщику.');
     replacing = true;
     try {
+      await repairRequirements();
       await pi.nativePreflight();
       const status = await client.call('kimiPiNativeInspect', null, target());
       if (!status.canReplaceKey) throw new Error('PI_NATIVE_PROFILE_CHANGED');
-      await recoverOwnCheck();
-      if (!await cleanOwnCheck(false)) throw new Error('cleanup-pending');
+      await invalidateCheck();
       await save({ hidden: false, stage: 'installing', phase: 'access', automatic: true, startedAt: Date.now(),
         keyChangedAt: Date.now(), testThreadId: null, verifyModel: null, message: '' });
       await prepareNativePi(apiKey, true);
@@ -202,7 +217,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       message: 'Профиль Pi изменён. Существующие файлы сохранены; нужна помощь партнёра.' });
     if (status.profile === 'ready' && status.registration) {
       await pi.preflight();
-      if ((await pi.activate(status.registration)).changed) return save({ stage: 'restart', phase: null, automatic: true, message: '' });
+      // Read-only inspection never activates or rewrites provider settings.
     }
     const verifyModel = external || status.profile === 'ready' ? await resolveVerifyModel() : null;
     if (verifyModel && (!pi.owned() || !status.needsKey)) return save({ stage: 'verify', phase: null, verifyModel,
@@ -248,9 +263,9 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (!pi.owned() || !view.canReplaceKey || occupied()) throw new Error('Этот профиль не принадлежит настройщику.');
     replacing = true;
     try {
+      await repairRequirements();
       await pi.preflight();
-      await recoverOwnCheck();
-      if (!await cleanOwnCheck(false)) throw new Error('cleanup-pending');
+      await invalidateCheck();
       await save({ hidden: false, stage: 'installing', phase: 'access', automatic: true, startedAt: Date.now(),
         keyChangedAt: Date.now(), testThreadId: null, verifyModel: null, message: '' });
       await pi.activate(await preparePi(apiKey, true));
@@ -277,6 +292,9 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       try { return (await bounded(bb.sdk.providers.list({ hostId: hostId ?? '' }))).some(provider => provider.id === PROVIDER); }
       catch { return false; }
     }
+  }
+  function ownsRegistration(current: Record<string, unknown> | undefined, agent: KimiAgent) {
+    return sameRegistration(current, agent) || !!view.registrationGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === view.registrationGeneration;
   }
   function sameRegistration(current: Record<string, unknown> | undefined, agent: KimiAgent) {
     return !!current && current.command === agent.command && JSON.stringify(current.args) === JSON.stringify(agent.args);
@@ -333,19 +351,23 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   }
   async function inspect() {
     if (isPi) return nativePi ? inspectNativePi() : inspectPi();
-    if (await hasProvider()) {
+    const status = await client.call('kimiInspect', null, target());
+    const providerExists = await hasProvider();
+    if (status.profile === 'partial' && status.needsKey && (!providerExists || status.agent && ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent))) {
+      return save({ stage: 'key', phase: null, verifyModel: null, canReplaceKey: false,
+        message: 'Ключ Kimi отсутствует или повреждён. Введи новый ключ; настройки профиля сохранятся.' });
+    }
+    if (providerExists) {
       const verifyModel = await resolveVerifyModel();
       const patch: Partial<KimiView> = { stage: 'verify', phase: null, verifyModel,
         message: verifyModel ? 'Kimi уже добавлен. Проверим ответ в обычном разговоре BB.' : 'Не удалось получить модели Kimi. Проверь, что компьютер BB подключён, и повтори проверку.', canReplaceKey: false };
       try {
-        const status = await client.call('kimiInspect', null, target());
-        patch.canReplaceKey = !!status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
+        patch.canReplaceKey = !!status.agent && ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
       } catch { /* Ownership must be confirmed before offering replacement. */ }
       return save(patch);
     }
-    const status = await client.call('kimiInspect', null, target());
     return save({ stage: status.profile === 'blocked' ? 'blocked'
-      : status.profile === 'absent' ? 'key' : 'registration',
+      : status.profile === 'absent' || status.needsKey ? 'key' : 'registration',
     message: status.profile === 'blocked' ? 'Папка настройки изменена. Существующие файлы сохранены; нужна помощь партнёра.' : '',
     canReplaceKey: false, verifyModel: null, phase: null,
     });
@@ -366,7 +388,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     const existing = list.find(item => item.id === agent.id);
     const knownCli = existing && [ 'k3.1-pro[1m]', 'k3.1-pro' ].some(model =>
       JSON.stringify(existing.modelCli) === JSON.stringify({ listArgs: [agent.args[0], '--list-models'], primaryModels: [model] }));
-    if (existing && !sameRegistration(existing, agent)) return false;
+    if (existing && !ownsRegistration(existing, agent)) return false;
     // Both BB's server cache and ACP's minute-long discovery cache key on the
     // registered launch environment. An inert generation invalidates both after
     // a profile mutation, on BB 0.48.1 as well as current BB. Preserve all user
@@ -377,7 +399,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (manualGeneration && !knownCli && (existing?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation) return true;
     const { modelCli, ...preserved } = existing ?? agent;
     const updated = {
-      ...preserved, ...(!knownCli && modelCli ? { modelCli } : {}),
+      ...preserved, command: agent.command, args: agent.args, ...(!knownCli && modelCli ? { modelCli } : {}),
       env: { ...((existing?.env ?? {}) as Record<string, string>), SVAIB_KIMI_CATALOG_GENERATION: generation },
     };
     phase('settings-write');
@@ -387,8 +409,10 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     const actual = (await agents()).find(item => item.id === agent.id);
     phase('registration-verify');
     if (!actual) throw new Error('Registration not saved');
-    return sameRegistration(actual, agent)
+    const confirmed = sameRegistration(actual, agent)
       && (actual.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation;
+    if (confirmed) await save({ registrationGeneration: generation });
+    return confirmed;
   }
 
   async function register(agent: KimiAgent) {
@@ -407,35 +431,45 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       return save({ stage: 'registration', message: 'Профиль готов. В этой версии BB добавь провайдера через настройки ACP.', manualRegistration: JSON.stringify([manualAgent], null, 2) });
     }
   }
+  async function repairRequirements() {
+    const runtime = await client.call('runtimePrepare', { context: { provider: PROVIDER, action: 'setup', hooks: true }, retry: true }, target());
+    if (runtime.status !== 'ready') throw new Error(runtime.message);
+  }
   async function start(apiKey?: string) {
     if (job || replacing) return snapshot();
+    // Explicit card action shares settings/CLI repair. Setup checks hooks;
+    // the profile adapter repairs its own launcher afterwards.
+    try { await repairRequirements(); }
+    catch (error) { return save({ stage: 'registration', phase: null, message: error instanceof Error ? error.message : 'Не удалось подготовить компьютер.' }); }
     if (isPi) return nativePi ? startNativePi(apiKey) : startPi(apiKey);
     if (await hasProvider()) {
       const status = await client.call('kimiInspect', null, target());
       const current = (await agents()).find(item => item.id === 'claude-kimi');
+      if (status.needsKey && !apiKey && status.agent && ownsRegistration(current, status.agent)) return inspect();
       await save({ hidden: false, stage: 'installing', automatic: true, phase: 'access', startedAt: Date.now(), message: '' });
       const run = async () => {
         try {
-          if (status.agent && sameRegistration(current, status.agent)) {
+          if (status.agent && ownsRegistration(current, status.agent)) {
             const manualGeneration = manualGenerationFor(status.agent);
-            const manualApplied = manualGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === manualGeneration;
+            const manualApplied = status.profile === 'ready' && manualGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === manualGeneration;
             // Manual registration belongs to the already prepared profile.
             // Mutating it again here would reuse its cache generation for new data.
             if (!manualApplied && view.manualRegistration) await save({ manualRegistration: null });
             if (!manualApplied) await save({ phase: 'components' });
-            const upgraded = manualApplied ? status.agent : await prepareProfile(undefined, 'recheck');
+            const upgraded = manualApplied ? status.agent : await prepareProfile(apiKey, 'recheck');
+            apiKey = undefined;
             await save({ phase: 'access' });
             await register(upgraded);
           } else await save({ stage: 'verify', canReplaceKey: false, verifyModel: await resolveVerifyModel() });
           if (view.stage === 'verify') await beginAutomaticCheck();
           else await save({ phase: null });
-        } catch { await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль. Существующие файлы сохранены; повтори настройку или обратись к партнёру.' }); }
+        } catch { apiKey = undefined; await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль. Существующие файлы сохранены; повтори настройку или обратись к партнёру.' }); }
       };
       job = run().finally(() => { job = null; }); void job.catch(() => {});
       return snapshot();
     }
     const status = await client.call('kimiInspect', null, target());
-    if (status.profile === 'blocked' || status.profile === 'absent' && !apiKey) return inspect();
+    if (status.profile === 'blocked' || (status.profile === 'absent' || status.needsKey) && !apiKey) return inspect();
     await save({ hidden: false, stage: 'installing', message: '', manualRegistration: null, phase: 'components', startedAt: Date.now(), automatic: true });
     // The key exists only in this call's memory and host RPC, never KV, settings,
     // a terminal, a model request, command argv, or the returned view.
@@ -461,6 +495,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   }
   function launch(apiKey?: string) {
     if (starting) return starting;
+    if (attempt || verificationStart) return Promise.resolve(snapshot());
     starting = start(apiKey).finally(() => { starting = null; });
     return starting;
   }
@@ -474,108 +509,126 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (environment.hostId !== hostId) throw new Error('Проверка запущена на другом компьютере.');
     return thread;
   }
-  async function recoverOwnCheck() {
-    const token = view.checkToken;
-    if (!token || view.ownedTestThreadId) return;
-    const rows = await bounded(bb.sdk.threads.list({ originPluginId: bb.pluginId, includeHidden: true, limit: 200 }));
-    if (!rows.length) return;
-    const metadata = await bounded(bb.sdk.threads.experimental_listPluginMetadata({ pluginId: bb.pluginId, threadIds: rows.map(row => row.id) }));
-    const match = metadata.threads.find(row => row.metadata.kimiCheck === token);
-    if (!match || view.checkToken !== token || view.ownedTestThreadId) return;
-    await checkedThread(match.threadId, false);
-    if (view.checkToken === token && !view.ownedTestThreadId) await save({ testThreadId: match.threadId, ownedTestThreadId: match.threadId });
-  }
-  async function cleanOwnCheck(completedOnly = true) {
-    const id = view.ownedTestThreadId;
-    if (!id || completedOnly && view.stage !== 'complete') return true;
+  const currentAttempt = (candidate: Attempt) => !disposed && attempt === candidate && candidate.generation === generation && candidate.keyVersion === view.keyChangedAt;
+  async function cleanupOwnedCheck(id: string, legacy = false, cleanupGeneration = generation) {
+    let thread;
     try {
-      await checkedThread(id);
-      await bb.sdk.threads.stop({ threadId: id });
-      await bb.sdk.threads.delete({ threadId: id, childThreadsConfirmed: false });
-      if (view.ownedTestThreadId === id) await save({ ownedTestThreadId: null, checkToken: null, ...(view.testThreadId === id ? { testThreadId: null } : {}) });
-      return true;
-    } catch (error) {
-      if ((error as { status?: number }).status === 404 || (error as { code?: string }).code === 'NOT_FOUND') {
-        if (view.ownedTestThreadId === id) await save({ ownedTestThreadId: null, checkToken: null, ...(view.testThreadId === id ? { testThreadId: null } : {}) }); return true;
+      thread = await bounded(checkedThread(id, false), 2000);
+      if (legacy) {
+        const metadata = await bounded(bb.sdk.threads.experimental_listPluginMetadata({ pluginId: bb.pluginId, threadIds: [id] }), 2000);
+        if (!metadata.threads.some(row => row.threadId === id && row.metadata.kimiSetup === 1)) return;
       }
-      log('cleanup', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
-      return false;
+    } catch { return; }
+    if ((thread.status === 'idle' || thread.status === 'error') && !attempt && !disposed && cleanupGeneration === generation) await save({ stopUnconfirmed: false });
+    if (thread.status !== 'idle' && thread.status !== 'error') {
+      try { await bounded(bb.sdk.threads.stop({ threadId: id }), 2000); if (!attempt && !disposed && cleanupGeneration === generation) await save({ stopUnconfirmed: false }); }
+      catch (error) {
+        stopWarning = 'Предыдущий проверочный запрос мог продолжиться: BB не подтвердил остановку. Следующее нажатие «Повторить» создаст один новый запрос.';
+        if (!disposed && !attempt && cleanupGeneration === generation) await save({ message: stopWarning, stopUnconfirmed: true });
+        log('cleanup', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
+      }
     }
+    // Removal of history is independent from both model readiness and stop.
+    try { await bounded(bb.sdk.threads.delete({ threadId: id, childThreadsConfirmed: false }), 2000); }
+    catch (error) { log('cleanup', 'failure', { reason: 'failed', ...kimiErrorFields(error) }); }
   }
-  async function failAutomaticCheck(message: string, testId: string) {
-    log('verification', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - (view.checkStartedAt ?? Date.now()) });
-    await save({ phase: null, message });
-    if (view.ownedTestThreadId === testId) {
-      try { await checkedThread(testId); await bb.sdk.threads.stop({ threadId: testId }); } catch { /* Retry keeps the owned ID for cleanup. */ }
-    }
+  async function sweepLegacy() {
+    if (legacySwept) return; legacySwept = true;
+    if (legacyCleanup) await cleanupOwnedCheck(legacyCleanup, true);
   }
-  function watchAutomaticCheck() {
+  async function invalidateCheck() {
+    generation++;
+    const previous = attempt; attempt = null;
     if (verificationTimer) clearTimeout(verificationTimer);
-    if (disposed || !view.automatic || view.phase !== 'check' || !view.testThreadId) return;
-    const testId = view.testThreadId; const keyVersion = view.keyChangedAt; const startedAt = view.checkStartedAt ?? view.startedAt;
-    const current = () => !disposed && view.testThreadId === testId && view.keyChangedAt === keyVersion && view.phase === 'check';
+    if (previous?.threadId) await cleanupOwnedCheck(previous.threadId);
+    await save({ phase: null, testThreadId: null, ownedTestThreadId: null, checkToken: null, checkStartedAt: null });
+  }
+  async function failAutomaticCheck(message: string, candidate: Attempt) {
+    if (!currentAttempt(candidate)) return;
+    log('verification', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - candidate.startedAt });
+    attempt = null;
+    await save({ phase: null, testThreadId: null, ownedTestThreadId: null, checkToken: null, checkStartedAt: null, message });
+    if (candidate.threadId) await cleanupOwnedCheck(candidate.threadId);
+  }
+  function watchAutomaticCheck(candidate = attempt) {
+    if (verificationTimer) clearTimeout(verificationTimer);
+    if (!candidate || !currentAttempt(candidate) || !candidate.threadId) return;
     verificationTimer = setTimeout(async () => {
-      if (disposed) return;
-      if (checking) { watchAutomaticCheck(); return; }
+      if (!currentAttempt(candidate)) return;
+      if (checking) { watchAutomaticCheck(candidate); return; }
       checking = true;
       try {
-        const next = await checkResponse(true);
-        if (next.stage === 'complete' || view.stage === 'complete') return;
-        if (!current()) return;
-        const thread = await checkedThread(testId);
-        if (!current()) return;
-        if (thread.status === 'error' || thread.status === 'idle' || Date.now() - (startedAt ?? 0) > 240_000) {
-          await failAutomaticCheck('Kimi не подтвердила проверочный ответ. Проверь ключ и доступ к модели, затем повтори проверку.', testId);
-          return;
+        await checkResponse(true);
+        if (!currentAttempt(candidate)) return;
+        const thread = await checkedThread(candidate.threadId!, false);
+        if (!currentAttempt(candidate)) return;
+        if (thread.status === 'error' || thread.status === 'idle' || Date.now() - candidate.startedAt > 240_000) {
+          await failAutomaticCheck('Kimi не подтвердила проверочный ответ. Проверь ключ и доступ к модели, затем повтори проверку.', candidate); return;
         }
       } catch {
-        if (current() && Date.now() - (startedAt ?? 0) > 240_000) {
-          await failAutomaticCheck('Не удалось дождаться ответа Kimi. Проверь подключение и повтори проверку.', testId); return;
+        if (currentAttempt(candidate) && Date.now() - candidate.startedAt > 240_000) {
+          await failAutomaticCheck('Не удалось дождаться ответа Kimi. Проверь подключение и повтори проверку.', candidate); return;
         }
       } finally { checking = false; }
-      if (current()) watchAutomaticCheck();
+      if (currentAttempt(candidate)) watchAutomaticCheck(candidate);
     }, 1500);
     verificationTimer.unref?.();
   }
-  async function beginAutomaticCheck() {
-    if (disposed) return;
-    if (view.checkToken && !view.ownedTestThreadId) await recoverOwnCheck();
-    if (view.ownedTestThreadId && view.testThreadId === view.ownedTestThreadId) {
-      await save({ phase: 'check' }); watchAutomaticCheck(); return;
-    }
-    await save({ phase: 'check', stage: 'verify', checkStartedAt: Date.now(), checkToken: randomUUID(), message: '', testThreadId: null });
-    log('verification', 'start');
-    try {
+  function beginAutomaticCheck() {
+    if (verificationStart) return verificationStart;
+    if (attempt || disposed) return Promise.resolve();
+    const run = async () => {
       const model = view.verifyModel;
-      if (!model || !hostId) throw new Error('model-unavailable');
-      const personal = (await bounded(bb.sdk.projects.list({ includePersonal: true }))).find(project => project.kind === 'personal');
-      if (disposed) return;
-      if (!personal) throw new Error('personal-project-unavailable');
-      const thread = await bb.sdk.threads.spawn({
-        projectId: personal.id,
-        providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: 'accept-edits',
-        title: 'Проверка Kimi', visibility: 'hidden',
-        environment: { type: 'host', hostId, workspace: { type: 'personal' } },
-        input: [{ type: 'text', text: 'Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы.', mentions: [] }],
-        pluginMetadata: { kimiSetup: 1, kimiCheck: view.checkToken },
-      });
-      await save({ testThreadId: thread.id, ownedTestThreadId: thread.id });
-      watchAutomaticCheck();
-    } catch (error) {
-      log('verification', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
-      try { await recoverOwnCheck(); } catch { /* Retry retains the nonce for recovery. */ }
-      if (view.ownedTestThreadId) watchAutomaticCheck();
-      else await save({ phase: null, message: 'Не удалось запустить проверку Kimi. Проверь подключение к BB и повтори.' });
-    }
+      if (!model || !hostId) { await save({ phase: null, message: 'Не удалось подтвердить каталог Kimi. Повтори проверку.' }); return; }
+      const candidate: Attempt = { nonce: randomUUID(), generation: ++generation, keyVersion: view.keyChangedAt, startedAt: Date.now(), model, threadId: null };
+      attempt = candidate;
+      await save({ phase: 'check', stage: 'verify', automatic: true, checkStartedAt: candidate.startedAt, startedAt: candidate.startedAt, checkToken: candidate.nonce, message: '', testThreadId: null, stopUnconfirmed: true });
+      log('verification', 'start');
+      try {
+        const personal = (await bounded(bb.sdk.projects.list({ includePersonal: true }))).find(project => project.kind === 'personal');
+        if (!currentAttempt(candidate)) return;
+        if (!personal) throw new Error('personal-project-unavailable');
+        const thread = await bounded(bb.sdk.threads.spawn({
+          projectId: personal.id, providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: 'accept-edits',
+          title: 'Проверка Kimi', visibility: 'hidden',
+          environment: { type: 'host', hostId, workspace: { type: 'personal' } },
+          input: [{ type: 'text', text: 'Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы.', mentions: [] }],
+          pluginMetadata: { kimiSetup: 1, kimiCheck: candidate.nonce },
+        }));
+        candidate.threadId = thread.id;
+        if (!currentAttempt(candidate)) { await cleanupOwnedCheck(thread.id, false, candidate.generation); return; }
+        await save({ testThreadId: thread.id, ownedTestThreadId: thread.id });
+        watchAutomaticCheck(candidate);
+      } catch (error) {
+        log('verification', 'failure', { reason: 'failed', ...kimiErrorFields(error) });
+        if (!currentAttempt(candidate)) return;
+        // Ambiguous spawn is never repeated. Locate only this live action's nonce.
+        try {
+          const rows = await bounded(bb.sdk.threads.list({ originPluginId: bb.pluginId, includeHidden: true, limit: 200 }), 2000);
+          const metadata = await bounded(bb.sdk.threads.experimental_listPluginMetadata({ pluginId: bb.pluginId, threadIds: rows.map(row => row.id) }), 2000);
+          const match = metadata.threads.find(row => row.metadata.kimiCheck === candidate.nonce);
+          if (match) { await checkedThread(match.threadId, false); candidate.threadId = match.threadId; }
+        } catch { /* The uncertainty remains visible; retry is an explicit action. */ }
+        if (!currentAttempt(candidate)) return;
+        if (candidate.threadId) { await save({ testThreadId: candidate.threadId, ownedTestThreadId: candidate.threadId }); watchAutomaticCheck(candidate); }
+        else {
+          attempt = null;
+          stopWarning = 'BB не подтвердил запуск и остановку предыдущего запроса. Он мог продолжиться. Следующее нажатие «Повторить» создаст один новый запрос.';
+          await save({ phase: null, testThreadId: null, ownedTestThreadId: null, message: stopWarning, stopUnconfirmed: true });
+        }
+      }
+    };
+    verificationStart = run().finally(() => { verificationStart = null; });
+    return verificationStart;
   }
   async function checkResponse(quiet = false) {
-    const testId = view.testThreadId;
-    const keyVersion = view.keyChangedAt;
-    const current = () => !replacing && (!occupied() || view.automatic && view.phase === 'check') && view.keyChangedAt === keyVersion && view.testThreadId === testId && view.stage === 'verify' && !view.hidden;
+    const candidate = attempt;
+    const testId = candidate?.threadId;
+    const current = () => !replacing && !!candidate && currentAttempt(candidate) && view.stage === 'verify';
     const pending = (message: string) => quiet || !current() ? Promise.resolve(snapshot()) : save({ message });
-    if (!view.testThreadId) return pending('Сначала отправь проверочный запрос Kimi.');
+    if (!candidate || !testId) return pending('Начни новую проверку Kimi.');
     try {
-      const thread = await checkedThread(view.testThreadId);
+      const thread = await checkedThread(testId);
       if (thread.status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.');
       const lastPiRequest = async () => (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
         types: ['client/thread/start', 'client/turn/start', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
@@ -587,7 +640,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         const request = sent && (sent.type === 'client/thread/start' || sent.type === 'client/turn/start') ? sent.data.request : null;
         const options = request?.params.options;
         const model = options && typeof options === 'object' && !Array.isArray(options) && 'model' in options ? options.model : null;
-        if (!view.verifyModel || model !== view.verifyModel) {
+        if (model !== candidate.model) {
           return pending('Для проверки выбери указанную модель Kimi в Pi и отправь новый проверочный запрос.');
         }
         sentIdentity = { id: sent!.id, seq: sent!.seq };
@@ -607,9 +660,10 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         if (!quiet) log('verification', 'failure', { reason: 'wrong-response' });
         return pending('Проверочный ответ не подтверждён. Открой разговор и проверь результат.');
       }
-      log('verification', 'success', { elapsedMs: Date.now() - (view.checkStartedAt ?? Date.now()) });
-      await save({ stage: 'complete', hidden: true, phase: null, message: 'Готово к работе', manualRegistration: null });
-      await cleanOwnCheck();
+      log('verification', 'success', { elapsedMs: Date.now() - candidate.startedAt });
+      attempt = null;
+      await save({ stage: 'complete', hidden: true, phase: null, testThreadId: null, ownedTestThreadId: null, checkToken: null, checkStartedAt: null, stopUnconfirmed: false, message: 'Готово к работе', manualRegistration: null });
+      void cleanupOwnedCheck(testId).catch(() => {});
       return snapshot();
     } catch { return pending('Не удалось проверить ответ. Открой разговор Kimi и повтори.'); }
   }
@@ -617,45 +671,32 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (!disposed && !view.hidden && view.stage === 'verify' && thread.id === view.testThreadId) await checkResponse();
   });
   const handlers = {
-    kimiStatus: async () => {
-      if (view.stage === 'complete' && view.ownedTestThreadId) await cleanOwnCheck();
-      if (!view.hidden && view.stage === 'verify' && view.testThreadId) return checkResponse(true);
-      if (view.stage === 'installing' && !occupied() && !view.hidden) {
-        try { if (view.automatic) return await launch(); return await inspect(); }
-        catch { return save({ stage: 'registration', phase: null, message: 'Подключи компьютер BB и продолжи настройку.' }); }
-      }
-      return snapshot();
-    },
+    kimiStatus: async () => snapshot(),
     kimiOpen: async () => {
       if (view.stage === 'complete') return snapshot();
       await save({ hidden: false });
-      if (occupied()) return snapshot();
-      if (view.automatic && view.phase === 'check' && view.testThreadId) { watchAutomaticCheck(); return snapshot(); }
-      try { if (view.automatic) return await launch(); return await inspect(); }
+      if (occupied() || attempt) return snapshot();
+      try { return await inspect(); }
       catch (error) { return save({ stage: 'blocked', phase: null, message: isPi ? piFailure(error) : 'Не удалось связаться с компьютером BB. Проверь подключение и повтори.' }); }
     },
     kimiStart: ({ apiKey }: { apiKey?: string }) => launch(apiKey),
     kimiDismiss: async ({ reason }: { reason: 'declined' | 'other-agent' }) => {
       if (occupied()) throw new Error('Дождись завершения текущего шага.');
+      if (attempt) await invalidateCheck();
       return save({ hidden: true, message: reason === 'other-agent' ? 'Выбран другой агент.' : '' });
     },
-    kimiTestStarted: async ({ threadId }: { threadId: string }) => {
-      if (occupied()) throw new Error('Дождись завершения текущего шага.');
-      const keyChangedAt = view.keyChangedAt;
-      const thread = await checkedThread(threadId, false);
-      // Recheck after I/O: a replacement may have begun or finished meanwhile.
-      if (occupied() || view.keyChangedAt !== keyChangedAt) throw new Error('Настройка изменилась. Отправь новый проверочный запрос.');
-      if (keyChangedAt !== null && thread.createdAt <= keyChangedAt) throw new Error('Разговор создан до замены ключа. Отправь новый проверочный запрос.');
-      await save({ stage: 'verify', testThreadId: threadId, message: '' });
-      return checkResponse();
-    },
+    // Legacy frontend bindings cannot attach an old conversation to a new action.
+    kimiTestStarted: async (_input: { threadId: string }) => { throw new Error('Начни новую проверку кнопкой «Повторить».'); },
     kimiCheckResponse: () => checkResponse(),
     kimiRecheck: () => {
-      if (occupied()) return Promise.resolve(snapshot());
+      if (starting || job || replacing || attempt || verificationStart) return Promise.resolve(snapshot());
       const run = async () => {
-        try { await recoverOwnCheck(); } catch { return save({ phase: null, message: 'Не удалось восстановить предыдущую проверку. Подключи BB и повтори.' }); }
-        if (!await cleanOwnCheck(false)) return save({ phase: null, message: 'Не удалось завершить предыдущую проверку. Подключи компьютер BB и повтори.' });
-        await save({ hidden: false, stage: 'intro', testThreadId: null, ownedTestThreadId: null, checkToken: null, message: '', phase: null, automatic: true });
+        const alreadyWarned = view.stopUnconfirmed;
+        await sweepLegacy();
+        if (!alreadyWarned && view.stopUnconfirmed) return snapshot();
+        await invalidateCheck();
+        stopWarning = '';
+        await save({ hidden: false, stage: 'intro', message: '', phase: null, automatic: true, stopUnconfirmed: false });
         return start();
       };
       starting = run().finally(() => { starting = null; }); return starting;
@@ -665,13 +706,13 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       if (!view.canReplaceKey || occupied()) throw new Error('Этот профиль не принадлежит настройщику.');
       replacing = true;
       try {
+        await repairRequirements();
         const status = await client.call('kimiInspect', null, target());
         const current = (await agents()).find(item => item.id === 'claude-kimi');
-        if (!status.agent || !sameRegistration(current, status.agent)) throw new Error('Регистрация Kimi изменилась. Существующее подключение сохранено.');
+        if (!status.agent || !ownsRegistration(current, status.agent)) throw new Error('Регистрация Kimi изменилась. Существующее подключение сохранено.');
         // The installing interlude keeps checkResponse off: a late reply of the
         // old key must not complete setup while the key is being replaced.
-        await recoverOwnCheck();
-        if (!await cleanOwnCheck(false)) throw new Error('cleanup-pending');
+        await invalidateCheck();
         // An RPC failure cannot prove whether the host committed the new key.
         // Invalidate the old manual binding before crossing that boundary.
         await save({ hidden: false, stage: 'installing', phase: 'access', startedAt: Date.now(),
@@ -688,50 +729,13 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       } finally { replacing = false; }
     },
   };
-  const needsResume = resume && (!isPi && view.stage === 'complete' && view.catalogVersion < CATALOG_VERSION && view.canReplaceKey
-    || view.automatic && (view.phase === 'check' || view.stage === 'installing' || view.stage === 'restart'));
-  if (needsResume) bb.background.service(nativePi ? 'kimi-pi-native-resume' : isPi ? 'kimi-pi-resume' : 'kimi-resume', {
-    async start(signal) {
-      if (signal.aborted || disposed) return;
-      // Host calls are forbidden during factory registration. Services start
-      // only once BB has registered the plugin and its host entry.
-      if (!isPi && view.stage === 'complete' && view.catalogVersion < CATALOG_VERSION && view.canReplaceKey) {
-        // Refresh owned context limits without another model request or reinstall.
-        job = (async () => {
-          try {
-            const status = await client.call('kimiInspect', null, target());
-            if (!status.agent || !sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
-            const agent = await prepareProfile(undefined, 'migration');
-            if (await writeRegistration(agent)) {
-              if (!await resolveVerifyModel()) throw new Error('Kimi catalog discovery failed');
-              await save({ automatic: true, catalogVersion: CATALOG_VERSION, catalogCheckedAt: Date.now(), message: 'Готово к работе' });
-            }
-          } catch { bb.log.warn('Не удалось обновить настройки моделей Kimi. Работающее подключение сохранено; повтори проверку в настройках плагина.'); }
-        })().finally(() => { job = null; }); void job.catch(() => {});
-      }
-      else if (view.automatic && view.phase === 'check' && view.testThreadId) watchAutomaticCheck();
-      else if (view.automatic && view.phase === 'check') {
-        job = (async () => {
-          try { await recoverOwnCheck(); } catch { /* Visible retry below. */ }
-          if (view.ownedTestThreadId) watchAutomaticCheck();
-          else await save({ phase: null, message: 'Проверка прервалась при перезапуске BB. Повтори проверку.' });
-        })().finally(() => { job = null; }); void job.catch(() => {});
-      }
-      else if (view.automatic && (view.stage === 'installing' || view.stage === 'restart')) await launch();
-      await starting;
-      await job;
-      if (!signal.aborted) await new Promise<void>(resolve => {
-        signal.addEventListener('abort', () => resolve(), { once: true });
-      });
-    },
-  });
   async function refreshCatalog(reason: 'scheduled' | 'startup' = 'scheduled') {
-    if (isPi || disposed || occupied() || !hostId || view.stage !== 'complete' || !view.canReplaceKey
+    if (isPi || disposed || occupied() || attempt || !hostId || !view.canReplaceKey
       || view.catalogCheckedAt !== null && Date.now() - view.catalogCheckedAt < CATALOG_TTL) return;
     job = kimiStep(log, 'refresh', async () => {
       const status = await client.call('kimiInspect', null, target());
-      if (!status.agent || !sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
-      const agent = await prepareProfile(undefined, reason);
+      if (status.profile !== 'ready' || !status.agent || !ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
+      const agent = await hostMutation('prepare', reason, diagnosticId => client.call('kimiRefreshCatalog', { diagnosticId }, target()));
       if (!await writeRegistration(agent)) return;
       // A failed BB discovery must remain due for retry, even if host settings succeeded.
       if (!await resolveVerifyModel()) throw new Error('Kimi catalog discovery failed');
@@ -742,7 +746,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   // Hourly inexpensive TTL check; at most one catalog request per day. On a
   // restart after downtime, refresh immediately once the host entry is available.
   if (!isPi) bb.background.schedule('kimi-catalog-refresh', '0 * * * *', () => refreshCatalog('scheduled'));
-  if (!isPi && !needsResume) bb.background.service('kimi-catalog-refresh', {
+  if (!isPi) bb.background.service('kimi-catalog-refresh', {
     async start(signal) {
       try { if (!signal.aborted) await refreshCatalog('startup'); }
       catch { bb.log.warn('Не удалось обновить каталог Kimi. Повторим проверку по расписанию.'); }
@@ -751,11 +755,20 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   });
   return { handlers, runtime: () => client.call('kimiPiInspect', null, target()),
     nativeRuntime: async () => { await pi.nativePreflight(); return client.call('kimiPiNativeInspect', null, target()); },
-    busy: () => occupied() || view.phase !== null, settled: async () => { await starting; await job; } };
+    busy: () => occupied() || !!attempt, settled: async () => { await starting; await job; await verificationStart; } };
 }
 
-/** One card, two independent profiles and resumable checks. Existing state stays CC. */
+/** One card, independent profiles and ephemeral checks. Existing state stays CC. */
 export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) {
+  const write = (event: KimiDiagnostic) => {
+    try { const line = '[kimi] ' + JSON.stringify(event); if (event.outcome === 'failure' || event.outcome === 'fallback') bb.log.warn(line); else bb.log.info(line); } catch { /* Diagnostics cannot fail setup. */ }
+  };
+  const diagnostics = { write, routes: new Map<string, (event: KimiDiagnostic) => void>() };
+  const signalClient = bb.hosts.experimental_client({ contract: browserContract, experimental_signals: kimiDiagnosticSignals });
+  bb.onDispose(signalClient.experimental_onSignal('kimiDiagnostic', event => {
+    if (event.hostId !== hostId) return;
+    write(event.payload); diagnostics.routes.get(event.payload.diagnosticId)?.(event.payload);
+  }));
   const pi = await createKimiPiSupport(bb, hostId);
   const selectionKey = 'kimi-harness:v1:' + (hostId ?? 'unavailable');
   const modeKey = 'kimi-pi-mode:v1:' + (hostId ?? 'unavailable');
@@ -763,9 +776,9 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   // Preserve an earlier explicitly configured isolated installation.
   let piMode: 'native' | 'managed' = savedMode === 'managed' || savedMode == null && pi.owned() ? 'managed' : 'native';
   let selected = await bb.storage.kv.get(selectionKey) === 'pi' ? 'pi' : 'claude-code';
-  const cc = await createKimiSetup(bb, hostId, 'claude-code', pi);
-  const nativePi = await createKimiSetup(bb, hostId, 'pi', pi, 'native', piMode === 'native');
-  const managedPi = await createKimiSetup(bb, hostId, 'pi', pi, 'managed', piMode === 'managed');
+  const cc = await createKimiSetup(bb, hostId, 'claude-code', pi, diagnostics);
+  const nativePi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'native');
+  const managedPi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'managed');
   const current = () => selected === 'pi' ? piMode === 'managed' ? managedPi : nativePi : cc;
   let selecting: Promise<KimiView> | null = null;
   const busy = () => cc.busy() || nativePi.busy() || managedPi.busy();

@@ -1,72 +1,111 @@
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { browserContract } from './experiments/account-prototype/browser-contract';
-import { connectionProviders, supportsConnection } from './experiments/account-prototype/connection-providers';
-import { runtimeSignals, type RuntimeView } from './runtime-contract';
+import { connectionProviders, supportsConnection, type ConnectionProvider } from './experiments/account-prototype/connection-providers';
+import { runtimeSignals, type RuntimeContext, type RuntimeView } from './runtime-contract';
+import { runtimeSettingsContract } from './runtime-settings-contract';
 
-/** Dispatch is the supported checkpoint after initialization and before a model runs.
- * No host RPC is called while the plugin factory is registering its surfaces. */
+/** Safe probes run at dispatch; installers are reachable only through explicit repair. */
 export function registerRuntimeGate(bb: BbPluginApi) {
   const client = bb.hosts.experimental_client({ contract: browserContract, experimental_signals: runtimeSignals });
-  const state = new Map<string, RuntimeView>(), jobs = new Map<string, Promise<RuntimeView>>();
-  const verified = new Set<string>();
+  const probes = new Map<string, Promise<RuntimeView>>(), jobs = new Map<string, Promise<RuntimeView>>();
   const abort = new AbortController(); bb.onDispose(() => abort.abort());
   bb.onDispose(client.experimental_onSignal('runtimeProgress', ({ hostId, payload }) => {
-    const old = state.get(hostId); state.set(hostId, { ...old, ...payload });
+    bb.realtime.publish('runtime-preparation-changed', { hostId, progress: payload });
+    // Signals report operation progress, never grant readiness to another provider.
     bb.experimental_hooks.recheck('message.dispatch');
   }));
-  const inspect = async (hostId: string) => {
-    let view = state.get(hostId);
-    if (!view) { view = await client.call('runtimeInspect', null, { hostId, signal: abort.signal, timeoutMs: 4000 }); state.set(hostId, view); }
-    return view;
+  async function resolveContext(hostId: string, input: RuntimeContext): Promise<RuntimeContext> {
+    if (input.executable) return input;
+    if (input.provider === 'acp-claude-kimi') {
+      try {
+        const settings = await bb.sdk.plugins.getSettings({ pluginId: 'provider-acp' });
+        const agents: unknown = JSON.parse(String(settings.values.customAgents ?? '[]'));
+        const agent = Array.isArray(agents) ? agents.find(a => a?.id === 'claude-kimi') : null;
+        if (typeof agent?.command === 'string' && Array.isArray(agent.args) && agent.args.every((a: unknown) => typeof a === 'string'))
+          return { ...input, executable: agent.command, args: agent.args };
+      } catch { /* The host still inspects its actual launcher; status cannot repair settings. */ }
+    }
+    if (input.provider !== 'acp-claude-kimi') {
+      try {
+        const status = await bb.sdk.hosts.providerCliStatus({ hostId });
+        const name = input.provider === 'claude-code' ? 'claude' : input.provider;
+        const cli = status[name] ?? status[input.provider];
+        if (cli?.installed && cli.executablePath) return { ...input, executable: cli.executablePath };
+      } catch { /* Older/offline discovery: bounded host probe resolves the native CLI. */ }
+    }
+    return input;
+  }
+  const inspect = async (hostId: string, input: RuntimeContext): Promise<RuntimeView> => {
+    const context = await resolveContext(hostId, input), key = JSON.stringify([hostId, context]);
+    const pending = probes.get(key); if (pending) return pending;
+    const job = client.call('runtimeInspect', context, { hostId, signal: abort.signal, timeoutMs: 45_000 })
+      .finally(() => probes.delete(key));
+    probes.set(key, job); return job;
   };
-  const prepare = (hostId: string, input: { retry?: boolean; portableNode?: boolean } = {}) => {
-    const pending = jobs.get(hostId); if (pending) return pending;
+  const prepare = (hostId: string, context: RuntimeContext, portableNode = false) => {
+    const key = JSON.stringify([hostId, context, portableNode]), pending = jobs.get(key); if (pending) return pending;
     const job = (async (): Promise<RuntimeView> => {
-      const { platform } = await inspect(hostId);
-      state.set(hostId, { platform, status: 'preparing', step: 'probe', message: platform === 'win32'
-        ? 'Подготавливаю Python, Git Bash, Node.js, npm и BB до запуска модели.'
-        : 'Проверяю компоненты компьютера.' });
-      try { return await client.call('runtimePrepare', input, { hostId, signal: abort.signal, timeoutMs: 35 * 60_000 }); }
-      catch { return { platform, status: 'failed', step: 'host', message: 'Подготовка компьютера прервана. Проверь его подключение. Повтор: bb svaib-workplace runtime prepare --retry.' }; }
-    })()
-      .then(view => { state.set(hostId, view); if (view.status === 'ready') verified.add(hostId); return view; })
-      .finally(() => { jobs.delete(hostId); if (state.get(hostId)?.status !== 'preparing') bb.experimental_hooks.recheck('message.dispatch'); });
-    jobs.set(hostId, job); return job;
+      const resolved = await resolveContext(hostId, context);
+      return client.call('runtimePrepare', { context: resolved, retry: true, portableNode },
+        { hostId, signal: abort.signal, timeoutMs: 35 * 60_000 });
+    })().finally(() => { jobs.delete(key); bb.realtime.publish('runtime-preparation-changed', { hostId }); bb.experimental_hooks.recheck('message.dispatch'); });
+    jobs.set(key, job); return job;
   };
   bb.experimental_hooks.on('message.dispatch', async context => {
-    if (!supportsConnection(context.thread.providerId) || !context.host || context.attempt === 'join-turn') return { action: 'proceed' };
-    let view: RuntimeView;
-    try { view = await inspect(context.host.id); }
-    catch { return { action: 'reject', message: 'Не удалось проверить компьютер перед запуском svaib. Подключи компьютер исполнения и повтори отправку.' }; }
-    if (view.platform !== 'win32' || (view.status === 'ready' && verified.has(context.host.id))) return { action: 'proceed' };
-    if (view.status === 'failed') return { action: 'reject', message: view.message };
-    if (!jobs.has(context.host.id)) void prepare(context.host.id);
-    return { action: 'wait', reason: view.status === 'idle' ? 'Подготавливаю компьютер до запуска svaib.' : view.message,
-      ...(view.status === 'preparing' ? { sendAt: Date.now() + 5000 } : {}) };
+    const provider = context.thread.providerId;
+    if (!supportsConnection(provider) || !context.host || context.attempt === 'join-turn') return { action: 'proceed' };
+    try {
+      const view = await inspect(context.host.id, { provider, action: 'dispatch', hooks: true });
+      if (view.status === 'ready') return { action: 'proceed' };
+      return { action: 'reject', message: `${view.message} Открой настройки плагина svaib → «Подготовка компьютера», выбери этот компьютер и ${provider}, затем нажми «Подготовить / Повторить».` };
+    } catch {
+      return { action: 'reject', message: 'Не удалось проверить компьютер исполнения. Открой настройки плагина svaib → «Подготовка компьютера» и повтори безопасную проверку. Установка запускается кнопкой «Подготовить / Повторить».' };
+    }
   });
   for (const provider of connectionProviders) bb.providers.experimental_contributeEnv(provider, async ({ hostId }) => {
-    const view = await inspect(hostId);
-    if (view.platform !== 'win32' || view.status !== 'ready' || !view.python) return [];
+    const view = await inspect(hostId, { provider, action: 'dispatch', hooks: true });
+    if (view.status !== 'ready' || !view.python) return [];
     return [{ name: 'SVAIB_PYTHON', value: view.python, reason: 'Проверенный Python для хуков svaib' },
-      ...(view.bash ? [{ name: 'CLAUDE_CODE_GIT_BASH_PATH', value: view.bash, reason: 'Проверенный Git Bash для Claude Code' }] : []),
-      ...(view.path ? [{ name: 'PATH', value: view.path, reason: 'Проверенные компоненты компьютера исполнения' }] : [])];
+      ...((provider === 'claude-code' || provider === 'acp-claude-kimi') && view.bash
+        ? [{ name: 'CLAUDE_CODE_GIT_BASH_PATH', value: view.bash, reason: 'Проверенный Git Bash для Claude Code' }] : []),
+      ...(view.path ? [{ name: 'PATH', value: view.path, reason: 'Проверенный запуск хуков svaib' }] : [])];
+  });
+  bb.rpc.register(runtimeSettingsContract, {
+    runtimeHosts: async () => {
+      const [config, hosts] = await Promise.all([bb.sdk.system.config(), bb.sdk.hosts.list()]);
+      return { primaryHostId: config.primaryHostId, hosts: hosts.map(h => ({ id: h.id, name: h.name })) };
+    },
+    runtimeStatus: ({ hostId, context }) => inspect(hostId, context),
+    runtimeRepair: ({ hostId, context, portableNode }) => prepare(hostId, context, portableNode),
+    runtimeCancelPreparation: ({ hostId }) => client.call('runtimeCancel', null, { hostId, timeoutMs: 15_000 }),
   });
   return {
-    commands: [{ name: 'runtime', summary: 'Проверить, повторить или отменить подготовку компьютера', usage: 'bb svaib-workplace runtime status|prepare|cancel [--retry] [--portable-node] [--host <id>]' }],
+    commands: [{ name: 'runtime', summary: 'Проверить или явно подготовить компьютер для выбранного провайдера',
+      usage: 'bb svaib-workplace runtime status|prepare|cancel [--provider codex|claude-code|acp-claude-kimi|pi] [--action dispatch|setup|install|cli] [--portable-node] [--host <id>]' }],
     async run(argv: string[], signal?: AbortSignal) {
       try {
-        const args = [...argv], action = args.shift(); let hostId: string | null = null, retry = false, portableNode = false;
-        while (args.length) { const flag = args.shift(); if (flag === '--host') { hostId = args.shift() ?? null; if (!hostId) throw new Error('Укажи компьютер после --host.'); }
-          else if (flag === '--retry') retry = true; else if (flag === '--portable-node') portableNode = true; else throw new Error('Неизвестный параметр подготовки.'); }
+        const args = [...argv], action = args.shift(); let hostId: string | null = null, portableNode = false;
+        let provider: ConnectionProvider = 'codex', runtimeAction: RuntimeContext['action'] = 'dispatch';
+        while (args.length) {
+          const flag = args.shift();
+          if (flag === '--host') { hostId = args.shift() ?? null; if (!hostId) throw new Error('Укажи компьютер после --host.'); }
+          else if (flag === '--retry') { /* Legacy flag: prepare is always an explicit fresh repair. */ }
+          else if (flag === '--portable-node') portableNode = true;
+          else if (flag === '--provider') { const next = args.shift(); if (!next || !supportsConnection(next)) throw new Error('Неизвестный провайдер.'); provider = next; }
+          else if (flag === '--action') { const next = args.shift(); if (!['dispatch', 'setup', 'install', 'cli'].includes(next ?? '')) throw new Error('Неизвестный сценарий.'); runtimeAction = next as RuntimeContext['action']; }
+          else throw new Error('Неизвестный параметр подготовки.');
+        }
         hostId ??= (await bb.sdk.system.config()).primaryHostId;
-        if (!hostId || !['status', 'prepare', 'cancel'].includes(action ?? '')) throw new Error('bb svaib-workplace runtime status|prepare|cancel [--retry] [--portable-node] [--host <id>]');
+        if (!hostId || !['status', 'prepare', 'cancel'].includes(action ?? '')) throw new Error('Используй runtime status|prepare|cancel [--provider <id>] [--host <id>].');
+        const context: RuntimeContext = { provider, action: runtimeAction, hooks: true };
         const cancel = () => { void client.call('runtimeCancel', null, { hostId: hostId!, timeoutMs: 15_000 }).catch(() => {}); };
         signal?.throwIfAborted(); if (action === 'prepare') signal?.addEventListener('abort', cancel, { once: true });
         try {
-          const view = action === 'status' ? await client.call('runtimeInspect', null, { hostId }) : action === 'cancel'
-            ? await client.call('runtimeCancel', null, { hostId, timeoutMs: 15_000 }) : await prepare(hostId, { retry, portableNode });
+          const view = action === 'status' ? await inspect(hostId, context) : action === 'cancel'
+            ? await client.call('runtimeCancel', null, { hostId, timeoutMs: 15_000 }) : await prepare(hostId, context, portableNode);
           return { exitCode: view.status === 'failed' ? 1 : 0, stdout: JSON.stringify(view, null, 2) };
         } finally { signal?.removeEventListener('abort', cancel); }
       } catch (error) { return { exitCode: 1, stderr: error instanceof Error ? error.message : 'Подготовка недоступна.' }; }
-    } };
+    },
+  };
 }

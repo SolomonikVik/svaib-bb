@@ -2,7 +2,7 @@ import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { kimiHostMethods } from '../../kimi-contract';
 import { kimiPiHostMethods } from '../../kimi-pi-contract';
-import { runtimeViewSchema } from '../../runtime-contract';
+import { runtimeViewSchema, runtimeContextSchema } from '../../runtime-contract';
 
 const hookInput = z.object({ executable: z.string().min(1), cwd: z.string().min(1) }).strict();
 const hookReview = z.object({ fingerprint: z.string().regex(/^[0-9a-f]{64}$/), hooks: z.array(z.object({
@@ -10,8 +10,8 @@ const hookReview = z.object({ fingerprint: z.string().regex(/^[0-9a-f]{64}$/), h
 }).strict()).min(1).max(128) }).strict();
 
 export const browserContract = defineRpcContract({
-  runtimePrepare: { input: z.object({ retry: z.boolean().optional(), portableNode: z.boolean().optional() }).strict(), output: runtimeViewSchema },
-  runtimeInspect: { input: z.null(), output: runtimeViewSchema },
+  runtimePrepare: { input: z.object({ context: runtimeContextSchema.optional(), retry: z.boolean().optional(), portableNode: z.boolean().optional() }).strict(), output: runtimeViewSchema },
+  runtimeInspect: { input: runtimeContextSchema.nullable(), output: runtimeViewSchema },
   runtimeCancel: { input: z.null(), output: runtimeViewSchema },
   ...kimiHostMethods,
   ...kimiPiHostMethods,

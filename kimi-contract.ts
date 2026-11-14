@@ -14,18 +14,23 @@ const key = z.string().max(512).regex(/^sk-kimi-[A-Za-z0-9_-]+$/, 'Нужен к
 export const kimiHostStatusSchema = z.object({
   nodeReady: z.boolean(), nodeVersion: z.string().nullable(),
   profile: z.enum(['absent', 'partial', 'ready', 'blocked']), agent: kimiAgentSchema.nullable(),
+  needsKey: z.boolean().optional(),
   verifyModels: z.array(z.string()).optional(),
 }).strict();
+export type KimiHostStatus = z.infer<typeof kimiHostStatusSchema>;
 export const kimiHostMethods = {
   kimiInspect: { input: z.null(), output: kimiHostStatusSchema, experimental_retryable: true },
   kimiPrepare: { input: z.object({ apiKey: key.optional(), diagnosticId: z.uuid().optional() }).strict(), output: kimiAgentSchema },
   kimiReplaceKey: { input: z.object({ apiKey: key, diagnosticId: z.uuid().optional() }).strict(), output: z.null() },
+  kimiRefreshCatalog: { input: z.object({ diagnosticId: z.uuid().optional() }).strict(), output: kimiAgentSchema },
 };
 export const kimiViewSchema = z.object({
   harness: z.enum(['claude-code', 'pi']).default('claude-code'),
   piMode: z.enum(['native', 'managed']).default('native'),
   revision: z.number().int().nonnegative(),
   canReplaceKey: z.boolean(),
+  registrationGeneration: z.uuid().nullable().optional(),
+  stopUnconfirmed: z.boolean().optional(),
   hidden: z.boolean(), stage: z.enum(['intro', 'node', 'key', 'installing', 'registration', 'restart', 'verify', 'complete', 'blocked']),
   message: z.string(), hostId: z.string(), testThreadId: z.string().nullable(),
   verifyModel: z.string().nullable().default(null), manualRegistration: z.string().nullable(),

@@ -56,7 +56,8 @@ export async function createKimiPiSupport(bb: BbPluginApi, hostId: string | null
     preflight,
     async activate(registration: PiLaunch) {
       const parsed = kimiPiRegistrationSchema.parse(registration);
-      if (launch && JSON.stringify(launch) !== JSON.stringify(parsed)) throw new Error('PI_LAUNCH_CHANGED');
+      if (launch && launch.args[1] !== parsed.args[1]) throw new Error('PI_LAUNCH_CHANGED');
+      const repairing = launch !== null && JSON.stringify(launch) !== JSON.stringify(parsed);
       await preflight();
       // Save ownership before the first setter. A restart between setters can
       // safely fill missing names without replacing any existing value.
@@ -64,13 +65,13 @@ export async function createKimiPiSupport(bb: BbPluginApi, hostId: string | null
       const values = { PI_CODING_AGENT_DIR: parsed.agentDir,
         BB_PI_BRIDGE_ARGS: JSON.stringify(parsed.args), BB_PI_BRIDGE_COMMAND: parsed.command };
       let changed = false;
-      // Commit the command last. Existing values are NEVER overwritten, even
-      // when their note still names us: public reads deliberately hide values.
+      // Commit the command last. Persisted launch plus matching ownership notes
+      // permits explicit repair; operator variables still fail preflight.
       for (const name of names) {
         const current = await preflight();
-        if (current.variables.some(variable => variable.name === name)) continue;
+        const missing = !current.variables.some(variable => variable.name === name);
         await bb.sdk.system.setMachineEnvironmentVariable({ name, value: values[name], note: note(parsed) });
-        changed = true;
+        changed ||= repairing || missing;
       }
       const confirmed = await preflight();
       if (names.some(name => !confirmed.variables.some(variable => variable.name === name && variable.note === note(parsed)))) {

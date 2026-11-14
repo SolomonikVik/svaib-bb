@@ -126,14 +126,43 @@ function supportedVersion(value: string) {
 async function state(ownerRoot: string, directory: string, env: NodeJS.ProcessEnv) {
   await regular(directory, true);
   const auth = await jsonFile(join(directory, 'auth.json'));
-  const models = await jsonFile(join(directory, 'models.json'));
-  const credential = kimiCredential(auth); const provider = kimiModels(models);
-  if (provider?.baseUrl !== undefined && provider.baseUrl !== BASE_URL) throw problem('PI_NATIVE_PROFILE_BLOCKED');
+  const credential = kimiCredential(auth);
   const owner = await ownerFile(ownerRoot, directory);
   const fingerprint = credential === undefined ? null : hash(credential);
   const owned = fingerprint !== null && !!owner && (owner.credentialHash === fingerprint || owner.pendingHash === fingerprint);
+  const modelsPath = join(directory, 'models.json');
+  const modelsRaw = await regular(modelsPath) ? await readFile(modelsPath) : null;
+  let models: Record<string, any> = {}, provider: Record<string, any> | undefined, modelsDamaged = false;
+  try {
+    const parsed: unknown = modelsRaw === null ? {} : JSON.parse(modelsRaw.toString('utf8').replace(/^\uFEFF/, ''));
+    if (!record(parsed)) throw problem('PI_NATIVE_PROFILE_BLOCKED');
+    models = parsed;
+    provider = kimiModels(models);
+  } catch {
+    if (!owned) throw problem('PI_NATIVE_PROFILE_BLOCKED');
+    modelsDamaged = true;
+    // Keep every parseable unrelated field/provider. Raw bytes are retained
+    // before explicit repair when the generated transport cannot be parsed.
+    if (!record(models.providers)) models = { ...models, providers: {} };
+    else models = { ...models, providers: { ...models.providers } };
+    delete models.providers[PROVIDER];
+  }
+  const needsRepair = owned && (modelsRaw === null || modelsDamaged || provider?.baseUrl !== BASE_URL)
+    || provider?.baseUrl !== undefined && provider.baseUrl !== BASE_URL;
+  if (needsRepair && !owned) throw problem('PI_NATIVE_PROFILE_BLOCKED');
   const externalKey = Object.keys(env).includes('KIMI_API_KEY') || provider?.apiKey !== undefined;
-  return { auth, models, credential, provider, owner, fingerprint, owned, hasCredential: credential !== undefined || externalKey, externalKey };
+  return { auth, models, modelsRaw, modelsDamaged, credential, provider, owner, fingerprint, owned, hasCredential: credential !== undefined || externalKey, externalKey, needsRepair };
+}
+
+async function checkModelsSnapshot(path: string, before: Buffer | null) {
+  const current = await regular(path) ? await readFile(path) : null;
+  if (before === null ? current !== null : current === null || !current.equals(before)) throw problem('PI_NATIVE_PROFILE_CHANGED');
+}
+
+async function backupDamagedModels(path: string, current: { modelsRaw: Buffer | null; modelsDamaged: boolean }) {
+  if (current.modelsDamaged && current.modelsRaw !== null) {
+    await writeFile(path + '.before-repair-' + randomUUID(), current.modelsRaw, { mode: 0o600, flag: 'wx' });
+  }
 }
 
 /** Inspect native CLI/profile without creating files or resolving credential values. */
@@ -149,7 +178,7 @@ export async function inspectNativeKimiPi(ownerRoot: string, signal: AbortSignal
     const cliVersion = await (options.probeVersion ?? version)(registration, signal);
     if (!supportedVersion(cliVersion)) throw problem('PI_NATIVE_VERSION_UNSUPPORTED');
     return { installed: true, registration, profile: current.hasCredential ? 'ready' : 'absent',
-      hasCredential: current.hasCredential, canReplaceKey: current.owned && !current.externalKey };
+      hasCredential: current.hasCredential, canReplaceKey: current.owned && !current.externalKey, ...(current.needsRepair ? { needsRepair: true } : {}) };
   } catch {
     signal.throwIfAborted();
     return { installed: registration !== null, registration: null, profile: 'blocked', hasCredential: false, canReplaceKey: false };
@@ -168,7 +197,7 @@ export async function prepareNativeKimiPi(ownerRoot: string, apiKey: string | un
   const registration = inspected.registration; const directory = registration.agentDir;
   // An existing login or environment credential needs no writes, even a supplied key
   // must not silently replace it. Recheck under lock below before every mutation.
-  if (inspected.hasCredential && !options.replaceKey) return registration;
+  if (inspected.hasCredential && !options.replaceKey && !inspected.needsRepair) return registration;
   if (!apiKey && !inspected.hasCredential) throw problem('PI_NATIVE_KEY_REQUIRED');
   if (!await regular(directory, true)) await mkdir(directory, { recursive: true, mode: 0o700 });
   const authPath = join(directory, 'auth.json'); const modelsPath = join(directory, 'models.json');
@@ -186,19 +215,29 @@ export async function prepareNativeKimiPi(ownerRoot: string, apiKey: string | un
     const check = () => { signal.throwIfAborted(); if (compromised) throw problem('PI_NATIVE_PROFILE_CHANGED'); };
     check();
     const current = await state(ownerRoot, directory, options.env ?? process.env);
-    if (current.hasCredential && !options.replaceKey) return registration;
+    if (current.hasCredential && !options.replaceKey && !current.needsRepair) return registration;
     if (options.replaceKey && (!current.owned || current.externalKey)) throw problem('PI_NATIVE_PROFILE_CHANGED');
+    if (current.needsRepair && !options.replaceKey) {
+      if (!current.owned) throw problem('PI_NATIVE_PROFILE_CHANGED');
+      await options.beforeWrite?.('models'); check();
+      await checkModelsSnapshot(modelsPath, current.modelsRaw);
+      await backupDamagedModels(modelsPath, current);
+      await atomicJson(modelsPath, { ...current.models, providers: { ...current.models.providers,
+        [PROVIDER]: { ...current.provider, baseUrl: BASE_URL } } });
+      return registration;
+    }
     if (!apiKey) throw problem('PI_NATIVE_KEY_REQUIRED');
-    if (current.provider?.baseUrl !== undefined && current.provider.baseUrl !== BASE_URL) throw problem('PI_NATIVE_PROFILE_CHANGED');
+    if (current.provider?.baseUrl !== undefined && current.provider.baseUrl !== BASE_URL && !current.owned) throw problem('PI_NATIVE_PROFILE_CHANGED');
     if (!await regular(ownerRoot, true)) await mkdir(ownerRoot, { recursive: true, mode: 0o700 });
     const nextCredential = { type: 'api_key', key: apiKey }; apiKey = undefined;
     const nextHash = hash(nextCredential);
     const owner: Owner = { schema: 1, agentDir: directory, credentialHash: current.fingerprint, pendingHash: nextHash };
     await atomicJson(ownerPath(ownerRoot, directory), owner);
-    if (current.provider?.baseUrl === undefined) {
+    if (current.provider?.baseUrl !== BASE_URL) {
       await options.beforeWrite?.('models'); check();
       // Detect a manual editor that ignored the cooperative lock before publication.
-      if (hash(await jsonFile(modelsPath)) !== hash(current.models)) throw problem('PI_NATIVE_PROFILE_CHANGED');
+      await checkModelsSnapshot(modelsPath, current.modelsRaw);
+      await backupDamagedModels(modelsPath, current);
       const merged = { ...current.models, providers: { ...(current.models.providers ?? {}), [PROVIDER]: { ...(current.provider ?? {}), baseUrl: BASE_URL } } };
       await atomicJson(modelsPath, merged);
     }

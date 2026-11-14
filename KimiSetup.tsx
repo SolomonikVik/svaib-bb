@@ -1,45 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRpc, useRealtime, useRealtimeConnectionState, useSdk, useBbNavigate, UrlLink, experimental_NewThreadComposer as NewThreadComposer } from '@get-bb/plugin-sdk/app';
+import { useRpc, useRealtime, useRealtimeConnectionState, UrlLink } from '@get-bb/plugin-sdk/app';
 import type { kimiRpcContract, KimiView } from './kimi-contract';
-import type { NewThreadRequest } from '@get-bb/plugin-sdk/app';
 import './kimi-setup.css';
-
-type PendingBinding = { threadId: string; keyChangedAt: number | null };
-// No prompt or key is stored here. Keep the created ID across navigation/reload,
-// even when the RPC that would save it on the server is unavailable.
-const pendingBindings = new Map<string, PendingBinding>();
-const bindingKey = (hostId: string) => `svaib-kimi-binding/${hostId}`;
-const bindingScope = (view: KimiView) => view.harness === 'pi' ? `${view.hostId}/pi/${view.piMode ?? 'native'}` : view.hostId;
-function rememberBinding(hostId: string, binding: PendingBinding | null) {
-  if (binding) pendingBindings.set(hostId, binding); else pendingBindings.delete(hostId);
-  try {
-    if (binding) window.localStorage.setItem(bindingKey(hostId), JSON.stringify(binding));
-    else window.localStorage.removeItem(bindingKey(hostId));
-  } catch { /* In-memory recovery still survives component remounts. */ }
-}
-function restoreBinding(view: KimiView): PendingBinding | null {
-  let binding = pendingBindings.get(bindingScope(view)) ?? null;
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(bindingKey(bindingScope(view))) ?? 'null');
-    binding = stored && typeof stored.threadId === 'string' && (stored.keyChangedAt === null || typeof stored.keyChangedAt === 'number') ? stored : null;
-  } catch { /* Storage can be unavailable in restricted browsers. */ }
-  if (binding && (binding.keyChangedAt !== view.keyChangedAt || view.testThreadId || view.stage === 'complete')) {
-    rememberBinding(bindingScope(view), null); return null;
-  }
-  return binding;
-}
 
 export function KimiSetup({ settings = false }: { settings?: boolean }) {
   const rpc = useRpc<typeof kimiRpcContract>();
-  const sdk = useSdk();
-  const navigate = useBbNavigate();
   const [view, setView] = useState<KimiView | null>(null);
   const [opened, setOpened] = useState(false);
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState('');
   const [editingKey, setEditingKey] = useState(false);
-  const [binding, setBinding] = useState<PendingBinding | null>(null);
-  const submitting = useRef(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
   const [finishedHere, setFinishedHere] = useState(false);
@@ -57,7 +27,6 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     revision.current = next.revision;
     if (next.phase) activeHere.current = true;
     if (next.stage === 'complete' && activeHere.current) setFinishedHere(true);
-    setBinding(restoreBinding(next));
     setView(next);
   }, []);
   const refresh = useCallback(async () => {
@@ -87,19 +56,6 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     catch { setError('Не удалось выполнить этот шаг. Проверь подключение к BB и повтори.'); return false; }
     finally { setBusy(false); }
   }
-  const openThread = (threadId: string) => {
-    try { navigate.toThread(threadId); }
-    catch { setError('Разговор создан. Открой «Проверка Kimi» в списке разговоров.'); }
-  };
-  const retryBinding = async () => {
-    const threadId = binding?.threadId;
-    if (!threadId || busy) return;
-    setBusy(true); setError('');
-    try { accept(await rpc.call('kimiTestStarted', { threadId })); }
-    catch { setError('Всё ещё не удалось сохранить проверку. Проверь подключение к BB и повтори ещё раз.'); return; }
-    finally { setBusy(false); }
-    openThread(threadId);
-  };
   if (settings && !opened) return <div className="svb-kimi-settings"><button className="svb-text-button" onClick={() => {
     setOpened(true); void act(() => rpc.call('kimiOpen', null));
   }}>Настроить или проверить Kimi</button></div>;
@@ -107,7 +63,6 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
   if (!settings && view.hidden && !finishedHere) return null;
   const isPi = view.harness === 'pi';
   const isManagedPi = isPi && view.piMode === 'managed';
-  const providerId = isPi ? 'pi' : 'acp-claude-kimi';
   const pending = busy || !!view.phase || view.stage === 'installing';
   const elapsed = Math.max(0, Math.floor((now - (view.startedAt ?? now)) / 1000));
   const phaseLabels = ['Устанавливаю компоненты', 'Настраиваю доступ', 'Проверяю ответ Kimi', 'Готово к работе'];
@@ -167,7 +122,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     </div>}
     {view.stage === 'installing' && !view.phase && <p role="status">Готовлю профиль и устанавливаю компоненты…</p>}
     {view.stage === 'restart' && <>
-      <p>Pi подготовлен. Заверши текущие задачи и полностью закрой и открой BB. После запуска проверка продолжится с сохранённым ключом. Для браузерного BB перезапускается его сервер.</p>
+      <p>Pi подготовлен. Заверши текущие задачи и полностью закрой и открой BB. После запуска нажми «Проверить после перезапуска». Ключ сохранён. Для браузерного BB перезапускается его сервер.</p>
       <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiStart', {})); }}>Проверить после перезапуска</button>
     </>}
     {view.stage === 'registration' && <>
@@ -178,50 +133,9 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
       </> : <><button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiStart', {})); }}>Продолжить настройку</button><details><summary>Если компоненты не удаётся скачать</summary><p>Проверь интернет. Если автоматическая подготовка Node.js не работает на этом компьютере, установи Node.js 22+ с npm и повтори настройку.</p><UrlLink href="https://nodejs.org/en/download" className="svb-kimi-link">Скачать Node.js</UrlLink></details></>}
     </>}
     {view.stage === 'verify' && <>
-      {view.automatic ? <>{!view.phase && <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiRecheck', null)); }}>Повторить проверку</button>}</> : <>
-      <p>Отправь короткий запрос через Kimi. Проверка запустится на компьютере, где настроен Kimi.</p>
-      {view.testThreadId ? <div className="svb-kimi-actions">
-          <button className="svb-text-button" onClick={() => openThread(view.testThreadId!)}>Открыть проверочный разговор</button>
-          <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiCheckResponse', null)); }}>Проверить ответ</button>
-          <button className="svb-text-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiRecheck', null)); }}>Начать новую проверку</button>
-        </div>
-      : binding ? <div className="svb-kimi-actions" role="status">
-          <p className="svb-kimi-note">Разговор «Проверка Kimi» создан, но проверка не сохранилась. Не отправляй запрос повторно.</p>
-          <button className="svb-text-button" onClick={() => openThread(binding.threadId)}>Открыть проверочный разговор</button>
-          <button className="svb-primary-button" disabled={pending} onClick={retryBinding}>Повторить сохранение</button>
-        </div>
-      : view.verifyModel ? <NewThreadComposer defaultProviderId={providerId} defaultModel={view.verifyModel} defaultPermissionMode="accept-edits"
-        defaultEnvironment={{ type: 'host', hostId: view.hostId, workspace: { type: 'unmanaged', path: null } }}
-        initialPrompt="Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы."
-        draftKey={`svaib-kimi-check/${bindingScope(view)}`} layout="document" onSubmit={async (request: NewThreadRequest) => {
-          // BB swallows errors thrown out of onSubmit, so every failure is also
-          // written to the visible status line before it is rethrown.
-          if (submitting.current || restoreBinding(view)) return;
-          submitting.current = true; setBusy(true); setError('');
-          let failure = 'Не удалось создать проверочный разговор. Проверь подключение к BB и повтори отправку.';
-          try {
-            let result;
-            try {
-              if (request.providerId !== providerId) { failure = `Для этой проверки выбери ${isPi ? 'Pi' : 'Kimi (CC)'}. Другого агента можно сохранить кнопкой ниже.`; throw new Error('wrong-provider'); }
-              if (isPi && request.model !== view.verifyModel) { failure = 'Для этой проверки выбери указанную модель Kimi в Pi.'; throw new Error('wrong-model'); }
-              if (!view.hostId) { failure = 'Компьютер настройки недоступен. Повтори проверку подключения к BB.'; throw new Error('missing-host'); }
-              // This is a check of the configured Kimi profile, so its host is
-              // fixed even when the shared composer restores a project default.
-              result = await sdk.threads.spawn({ ...request,
-                environment: { type: 'host', hostId: view.hostId, workspace: { type: 'unmanaged', path: null } },
-                title: 'Проверка Kimi', pluginMetadata: { kimiSetup: 1 } });
-            } catch (error) { setError(failure); throw error; }
-            const pendingBinding = { threadId: result.id, keyChangedAt: view.keyChangedAt };
-            rememberBinding(bindingScope(view), pendingBinding); setBinding(pendingBinding);
-            try { accept(await rpc.call('kimiTestStarted', { threadId: result.id })); }
-            catch { return; }
-            openThread(result.id);
-          } finally { submitting.current = false; setBusy(false); }
-        }} />
-      : <div className="svb-kimi-actions" role="status">
-          <p className="svb-kimi-note">Не удалось получить модели Kimi. Проверь, что компьютер BB подключён.</p>
-          <button className="svb-primary-button" disabled={pending} onClick={open}>Повторить проверку</button>
-        </div>}
+      {!view.phase && <>
+        <p>Проверим свежий короткий ответ выбранной модели в BB.</p>
+        <button className="svb-primary-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiRecheck', null)); }}>Повторить проверку</button>
       </>}
       {view.canReplaceKey && !editingKey && <button className="svb-text-button" disabled={pending} onClick={() => setEditingKey(true)}>Исправить ключ</button>}
       {view.canReplaceKey && editingKey && <form onSubmit={event => {
