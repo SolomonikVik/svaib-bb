@@ -307,6 +307,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     let operation: 'host-inspect' | 'settings-read' | 'provider-models' = 'host-inspect';
     try {
       if (isPi) {
+        operation = 'provider-models';
         const query = { hostId, providerId: 'pi', preferCached: false, signal: abort.signal };
         // BB0.48.1 first returns a cached empty catalog while its refresh runs.
         // Keep the visible step active instead of asking for another install/key.
@@ -314,9 +315,16 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         const deadline = Date.now() + (nativePi && waitForNativeRefresh ? 75_000 : 15_000);
         for (let attempt = 0; attempt < attempts && Date.now() < deadline; attempt++) {
           if (disposed) return null;
-          const catalog = await bounded(bb.sdk.providers.models(query), Math.min(8000, deadline - Date.now()));
-          const available = !catalog.modelLoadError && catalog.providers.some(provider => provider.id === 'pi' && provider.available);
-          const models = available ? catalog.models.filter(model => model.id.startsWith('kimi-coding/')) : [];
+          let catalog: Awaited<ReturnType<typeof bb.sdk.providers.models>> | null = null;
+          try { catalog = await bounded(bb.sdk.providers.models(query), Math.min(8000, deadline - Date.now())); }
+          catch (error) {
+            // A cold discovery can outlive one lookup while BB refreshes its
+            // catalogue. Keep the remaining native setup budget available.
+            if (!nativePi || !waitForNativeRefresh || !(error instanceof Error)
+              || error.message !== 'BB timeout' && error.name !== 'TimeoutError') throw error;
+          }
+          const available = catalog && !catalog.modelLoadError && catalog.providers.some(provider => provider.id === 'pi' && provider.available);
+          const models = available && catalog ? catalog.models.filter(model => model.id.startsWith('kimi-coding/')) : [];
           const model = (models.find(model => model.id === 'kimi-coding/k3.1-pro') ?? models.find(model => model.isDefault) ?? models[0])?.id;
           if (model) { log('bb-discovery', 'success', { modelCount: models.length, elapsedMs: Date.now() - started }); return model; }
           if (attempt < attempts - 1) await new Promise<void>(resolve => {
@@ -589,7 +597,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         if (!currentAttempt(candidate)) return;
         if (!personal) throw new Error('personal-project-unavailable');
         const thread = await bounded(bb.sdk.threads.spawn({
-          projectId: personal.id, providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: 'accept-edits',
+          projectId: personal.id, providerId: PROVIDER, model, reasoningLevel: 'high', permissionMode: isPi ? 'full' : 'accept-edits',
           title: 'Проверка Kimi', visibility: 'hidden',
           environment: { type: 'host', hostId, workspace: { type: 'personal' } },
           input: [{ type: 'text', text: 'Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы.', mentions: [] }],
@@ -630,8 +638,14 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     try {
       const thread = await checkedThread(testId);
       if (thread.status !== 'idle') return pending('Ответ ещё не получен. Проверь разговор и повтори проверку.');
-      const lastPiRequest = async () => (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
-        types: ['client/thread/start', 'client/turn/start', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+      const lastPiRequest = async () => {
+        // BB records resolved execution separately; the wire-level start can
+        // legitimately have empty params. Keep the legacy event path as fallback.
+        const resolved = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+          types: ['client/turn/requested', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+        return resolved ?? (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+          types: ['client/thread/start', 'client/turn/start', 'provider/modelFallback'], order: 'desc', limit: '1' })))[0];
+      };
       let sentIdentity: { id: string; seq: number } | null = null;
       if (isPi) {
         // Read the model that was sent, not mutable composer defaults or a
@@ -639,9 +653,22 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         const sent = await lastPiRequest();
         const request = sent && (sent.type === 'client/thread/start' || sent.type === 'client/turn/start') ? sent.data.request : null;
         const options = request?.params.options;
-        const model = options && typeof options === 'object' && !Array.isArray(options) && 'model' in options ? options.model : null;
+        const model = sent?.type === 'client/turn/requested' ? sent.data.execution.model
+          : options && typeof options === 'object' && !Array.isArray(options) && 'model' in options ? options.model : null;
         if (model !== candidate.model) {
           return pending('Для проверки выбери указанную модель Kimi в Pi и отправь новый проверочный запрос.');
+        }
+        if (sent?.type === 'client/turn/requested') {
+          const accepted = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+            types: ['turn/input/accepted'], order: 'desc', limit: '1' })))[0];
+          const completed = (await bounded(bb.sdk.threads.events.list({ threadId: thread.id,
+            types: ['turn/completed'], order: 'desc', limit: '1' })))[0];
+          if (accepted?.type !== 'turn/input/accepted' || completed?.type !== 'turn/completed'
+            || accepted.data.clientRequestId !== sent.data.requestId
+            || !('turnId' in accepted.scope) || !('turnId' in completed.scope)
+            || accepted.scope.turnId !== completed.scope.turnId || completed.data.status !== 'completed') {
+            return pending('Проверочный запрос ещё не подтверждён завершённым ходом Pi.');
+          }
         }
         sentIdentity = { id: sent!.id, seq: sent!.seq };
         // A turn may have started between the first status and event reads.
