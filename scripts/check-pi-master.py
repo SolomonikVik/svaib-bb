@@ -208,10 +208,28 @@ def main():
                        'knownLimitation': 'Deleting native Pi journals starts empty history; BB does not replay its transcript'})
     except Exception as error:
         report.update({'result': 'FAIL', 'error': str(error)[-4000:]})
+        diagnostics = {}
+        try:
+            diagnostics['providerCliStatus'] = cli('machine', 'provider-cli', 'status', machine['id'], '--json')
+            diagnostics['pluginLog'] = subprocess.run([str(node), str(bb_script), 'plugin', 'logs', 'svaib-workplace', '--lines', '60'],
+                env=env, cwd=workspace, capture_output=True, text=True, encoding='utf-8', timeout=20).stdout[-16000:]
+            if not diagnostics['providerCliStatus'].get('pi', {}).get('installed'):
+                retry = subprocess.run([str(node), str(bb_script), 'machine', 'provider-cli', 'install', machine['id'], 'pi', '--json'],
+                    env=env, cwd=workspace, capture_output=True, text=True, encoding='utf-8', timeout=120)
+                diagnostics['officialInstallerRetry'] = {'exitCode': retry.returncode, 'stdout': retry.stdout[-16000:], 'stderr': retry.stderr[-4000:]}
+            direct = prefix / ('node_modules' if os.name == 'nt' else 'lib/node_modules') / '@earendil-works/pi-coding-agent/dist/bundle/cli.js'
+            diagnostics['nativeCliFileExists'] = direct.is_file()
+            if direct.is_file():
+                probe = subprocess.run([str(node), str(direct), '--version'], env=env, cwd=workspace,
+                    capture_output=True, text=True, encoding='utf-8', timeout=30)
+                diagnostics['directNodeProbe'] = {'exitCode': probe.returncode, 'stdout': probe.stdout[-2000:], 'stderr': probe.stderr[-4000:]}
+        except Exception as diagnostic_error:
+            diagnostics['collectionError'] = str(diagnostic_error)[-2000:]
+        (artifact / 'diagnostics.json').write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding='utf-8')
         raise
     finally:
         (artifact / 'result.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
-        print(json.dumps(report, ensure_ascii=False), flush=True)
+        print(json.dumps(report, ensure_ascii=True), flush=True)
         stop_server()
         output.close()
 

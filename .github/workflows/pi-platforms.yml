@@ -51,3 +51,4 @@ jobs:
             ${{ runner.temp }}/pi-acceptance/result.json
             ${{ runner.temp }}/pi-acceptance/model-requests.jsonl
             ${{ runner.temp }}/pi-acceptance/bb-server.log
+            ${{ runner.temp }}/pi-acceptance/diagnostics.json

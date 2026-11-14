@@ -6,7 +6,7 @@ import type { KimiView } from '../kimi-contract';
 
 const hostId = 'host_native';
 const registration = { command: '/native/pi', args: [], agentDir: '/user/.pi/agent' };
-async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
+async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; completionPendingOnce?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
   let installed = !options.absent, credential = !!options.credential, owned = false, output = '';
   let installs = 0, spawns = 0, eventSeq = 1, becameActive = false;
   const env = [
@@ -29,7 +29,10 @@ async function fixture(options: { absent?: boolean; credential?: boolean; enviro
       events: { list: async input => {
         if (options.activeOnEvent) becameActive = true;
         if (input.types?.includes('turn/input/accepted')) return [{ id: 'evt_accepted', threadId: input.threadId, seq: 2, createdAt: Date.now(), scope: { kind: 'turn', turnId: 'turn_fixture' }, type: 'turn/input/accepted', data: { providerThreadId: 'pi_fixture', clientRequestId: options.unaccepted ? 'other_request' : 'request_' + eventSeq } }];
-        if (input.types?.includes('turn/completed')) return [{ id: 'evt_complete', threadId: input.threadId, seq: 3, createdAt: Date.now(), scope: { kind: 'turn', turnId: options.otherTurn ? 'other_turn' : 'turn_fixture' }, type: 'turn/completed', data: { providerThreadId: 'pi_fixture', status: 'completed' } }];
+        if (input.types?.includes('turn/completed')) {
+          if (options.completionPendingOnce) { options.completionPendingOnce = false; return []; }
+          return [{ id: 'evt_complete', threadId: input.threadId, seq: 3, createdAt: Date.now(), scope: { kind: 'turn', turnId: options.otherTurn ? 'other_turn' : 'turn_fixture' }, type: 'turn/completed', data: { providerThreadId: 'pi_fixture', status: 'completed' } }];
+        }
         if (input.types?.includes('client/turn/requested')) {
           assert.deepEqual(input.types, ['client/turn/requested', 'provider/modelFallback']);
           assert.equal(input.order, 'desc'); assert.equal(input.limit, '1');
@@ -184,6 +187,15 @@ test('resolved execution still rejects a different model, fallback, unmatched ac
     await f.call('kimiSelectHarness', { harness: 'pi' }); await f.call('kimiStart', {}); await f.controller.settled();
     f.answer(); assert.equal((await f.call('kimiCheckResponse')).stage, 'verify');
   }
+});
+
+test('idle Pi waits for persisted completion before rejecting verification', async t => {
+  const f = await fixture({ credential: true, requestedEvent: true, completionPendingOnce: true }); t.after(() => f.harness.lifecycle.dispose());
+  await f.call('kimiSelectHarness', { harness: 'pi' }); await f.call('kimiStart', {}); await f.controller.settled();
+  f.answer();
+  await new Promise(resolve => setTimeout(resolve, 1800));
+  assert.equal((await f.call('kimiStatus')).phase, 'check');
+  assert.equal((await f.call('kimiCheckResponse')).stage, 'complete');
 });
 
 
