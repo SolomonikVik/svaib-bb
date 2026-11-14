@@ -3,7 +3,7 @@ import { useRpc, useRealtime, useRealtimeConnectionState, UrlLink } from '@get-b
 import type { kimiRpcContract, KimiView } from './kimi-contract';
 import './kimi-setup.css';
 
-export function KimiSetup({ settings = false }: { settings?: boolean }) {
+export function KimiSetup({ settings = false, cabinetVisible, onVisibilityChange }: { settings?: boolean; cabinetVisible?: boolean; onVisibilityChange?(visible: boolean): Promise<void> }) {
   const rpc = useRpc<typeof kimiRpcContract>();
   const [view, setView] = useState<KimiView | null>(null);
   const [opened, setOpened] = useState(false);
@@ -12,9 +12,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
   const [editingKey, setEditingKey] = useState(false);
   const [error, setError] = useState('');
   const [connectionError, setConnectionError] = useState('');
-  const [finishedHere, setFinishedHere] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const activeHere = useRef(false);
   const refreshing = useRef(false);
   const connection = useRealtimeConnectionState();
   const revision = useRef(-1);
@@ -25,8 +23,6 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     if (harness === revisionHarness.current && next.revision < revision.current) return;
     revisionHarness.current = harness;
     revision.current = next.revision;
-    if (next.phase) activeHere.current = true;
-    if (next.stage === 'complete' && activeHere.current) setFinishedHere(true);
     setView(next);
   }, []);
   const refresh = useCallback(async () => {
@@ -56,11 +52,11 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     catch { setError('Не удалось выполнить этот шаг. Проверь подключение к BB и повтори.'); return false; }
     finally { setBusy(false); }
   }
-  if (settings && !opened) return <div className="svb-kimi-settings"><button className="svb-text-button" onClick={() => {
+  if (settings && !opened) return <div className="svb svb-kimi-settings"><button className="svb-text-button" onClick={() => {
     setOpened(true); void act(() => rpc.call('kimiOpen', null));
   }}>Настроить или проверить Kimi</button></div>;
-  if (!view) return settings ? <div className="svb-kimi-settings" role="status"><p>{error || 'Проверяю настройку Kimi…'}</p><button onClick={() => { void act(() => rpc.call('kimiOpen', null)); }}>Повторить</button></div> : null;
-  if (!settings && view.hidden && !finishedHere) return null;
+  if (!view) return settings ? <div className="svb svb-kimi-settings" role="status"><p>{error || 'Проверяю настройку Kimi…'}</p><button className="svb-text-button" onClick={() => { void act(() => rpc.call('kimiOpen', null)); }}>Повторить</button></div> : null;
+  if (!settings && ((cabinetVisible === undefined ? view.hidden : !cabinetVisible) || view.stage === 'complete')) return null;
   const isPi = view.harness === 'pi';
   const isManagedPi = isPi && view.piMode === 'managed';
   const pending = busy || !!view.phase || view.stage === 'installing';
@@ -76,19 +72,24 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     : progress?.step === 'runtime-probe' ? progress.component === 'pi' ? 'Проверяю запуск Pi…' : progress.component === 'claude-code' ? 'Проверяю запуск Claude Code…'
       : progress.component === 'adapter' ? 'Проверяю адаптер Kimi…' : 'Проверяю запуск Node.js…' : null;
   const dismiss = (reason: 'declined' | 'other-agent') => {
+    if (onVisibilityChange) {
+      setKey(''); setBusy(true); setError('');
+      void onVisibilityChange(false).then(() => { if (settings) setOpened(false); }, () => setError('Не удалось сохранить видимость панели. Повтори действие.')).finally(() => setBusy(false));
+      return;
+    }
     setKey(''); void act(() => rpc.call('kimiDismiss', { reason })).then(ok => { if (ok && settings) setOpened(false); });
   };
   const open = () => { void act(() => rpc.call('kimiOpen', null)); };
-  return <section className="svb svb-kimi" aria-label="Настройка Kimi" aria-busy={pending}>
-    <div className="svb-kimi-heading"><div><span className="svb-kicker">Доступ к модели</span><h2>{view.stage === 'complete' ? (view.automatic ? 'Готово к работе' : 'Kimi отвечает') : isPi ? 'Kimi через Pi' : 'Kimi через Claude Code'}</h2></div>
-      {settings && <button className="svb-text-button" disabled={pending} onClick={() => {
-        setKey(''); void act(() => rpc.call('kimiDismiss', { reason: 'declined' })).then(ok => { if (ok) setOpened(false); });
-      }}>Закрыть</button>}
+  return <section className="svb svaib-setup-panel svb-kimi" aria-label="Настройка Kimi" aria-busy={pending}>
+    <div className="svaib-setup-panel-heading"><div><span className="svb-kicker">Доступ к модели</span><h2>{view.stage === 'complete' ? (view.automatic ? 'Готово к работе' : 'Kimi отвечает') : isPi ? 'Kimi через Pi' : 'Kimi через Claude Code'}</h2></div>
+      <button className="svb-text-button" disabled={pending} onClick={() => {
+        if (settings && onVisibilityChange) { setKey(''); setOpened(false); } else dismiss('declined');
+      }}>{settings ? 'Закрыть' : 'Скрыть'}</button>
     </div>
     {(settings || view.stage !== 'complete') && <label>Среда для Kimi<select aria-label="Среда для Kimi" value={view.harness ?? 'claude-code'} disabled={pending} onChange={event => {
       const harness = event.target.value === 'pi' ? 'pi' : 'claude-code';
       selectionEpoch.current++;
-      setKey(''); setEditingKey(false); setFinishedHere(false); activeHere.current = false;
+      setKey(''); setEditingKey(false);
       void act(() => rpc.call('kimiSelectHarness', { harness }));
     }}><option value="claude-code">Claude Code</option><option value="pi">Pi</option></select></label>}
     {isManagedPi && <p className="svb-kimi-note">Резервная изолированная установка: отдельные Node и Pi, один компьютер исполнения и полный перезапуск BB. <button className="svb-text-button" disabled={pending} onClick={() => { selectionEpoch.current++; setKey(''); void act(() => rpc.call('kimiSelectPiMode', { mode: 'native' })); }}>Использовать штатный Pi</button></p>}
@@ -147,7 +148,7 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
       <summary>Если штатный Pi не запускается</summary>
       <p>Помощник может проверить Node/npm и текущие настройки. Резервный способ ставит отдельные Node и Pi; он рассчитан на один компьютер исполнения и требует полного перезапуска BB.</p>
       <button className="svb-text-button" disabled={pending} onClick={() => {
-        selectionEpoch.current++; setKey(''); setEditingKey(false); activeHere.current = false;
+        selectionEpoch.current++; setKey(''); setEditingKey(false);
         void act(() => rpc.call('kimiSelectPiMode', { mode: 'managed' }));
       }}>Выбрать резервную установку</button>
     </details>}
@@ -157,7 +158,6 @@ export function KimiSetup({ settings = false }: { settings?: boolean }) {
     {(view.message || error) && <p role="status" className="svb-kimi-note">{error || view.message}</p>}
     {view.stage !== 'complete' && <div className="svb-kimi-footer">
       <button className="svb-text-button" disabled={pending} onClick={() => dismiss('other-agent')}>У меня уже есть другой агент</button>
-      <button className="svb-text-button" disabled={pending} onClick={() => dismiss('declined')}>Не сейчас</button>
     </div>}
   </section>;
 }

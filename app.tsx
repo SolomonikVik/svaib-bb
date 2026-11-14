@@ -20,8 +20,9 @@ import { PersonalOverview, PersonalSectionPage, PersonalActionsPage, PersonalDoc
 import type { PersonalLibraryState } from "./PersonalViews";
 import { AccountPage, AccountRouter } from "./experiments/account-prototype/app";
 import { ScreenPanel } from "./ScreenPanel";
-import { KimiSetup } from './KimiSetup';
-import { RuntimePreparation } from './RuntimePreparation';
+import { PersonalRuntimePreparation, PersonalKimiSetup } from './PersonalSetupPanels';
+import { UserPreferencesProvider, useUserPreferences } from './UserPreferences';
+import { defaultUserPreferences, orderWorkspaces, startupRoute } from './user-preferences-contract';
 import { ScreenLauncher, useScreenLauncher } from "./ScreenLauncher";
 import { lastCompanyWorkspace, rememberCompanyWorkspace } from './company-navigation';
 import { clearCabinetSnapshots } from './experiments/account-prototype/cabinet-cache';
@@ -196,15 +197,44 @@ function EmptyWorkspaces() {
   const navigate = useBbNavigate();
   return <section className="svb-empty" role="status"><Glyph name="Layers" /><h2>Рабочие пространства</h2><p>Здесь появятся подключённые пространства. Работу с партнёром можно начать в обычном чате BB.</p><button className="svb-primary-button" onClick={() => navigate.toPluginPanel('workplace', { subPath: 'settings/account' })}>Мой svaib<Glyph name="ArrowUpRight" /></button></section>;
 }
-function WorkplaceRouter({ subPath = '' }: PluginNavPanelProps) {
-  const overview = useOverview();
-  const { data, refresh } = overview;
+function WorkplaceRouter(props: PluginNavPanelProps) {
+  return <UserPreferencesProvider><WorkplaceRouterContent {...props} /></UserPreferencesProvider>;
+}
+function WorkplaceRouterContent({ subPath = '' }: PluginNavPanelProps) {
+  const sourceOverview = useOverview(), personal = useUserPreferences();
+  const sourceData = sourceOverview.data, refresh = sourceOverview.refresh;
+  const ownPreferences = !!sourceData?.accountId && personal?.snapshot?.accountId === sourceData.accountId;
+  const preferences = ownPreferences ? personal!.snapshot!.preferences : defaultUserPreferences();
+  const data = sourceData ? { ...sourceData, workspaces: orderWorkspaces(sourceData.workspaces, preferences.workspaceOrder) } : sourceData;
+  const overview = { ...sourceOverview, data };
   const navigate = useBbNavigate();
   const accountRpc = useRpc<typeof accountRpcContract>();
-  const cabinet = subPath === 'settings/account' || subPath.startsWith('settings/account/');
-  const explicitRoute = subPath.split('/')[0];
   const saved = data?.accountId ? lastCompanyWorkspace(data.accountId) : null;
-  const active = explicitRoute || (saved && data?.workspaces.some(w => w.id === saved) ? saved : data?.workspaces.find(w => !w.companyId)?.id);
+  const startupSelection = useRef<{ accountId: string; route: string } | null>(null);
+  if (subPath || startupSelection.current?.accountId !== data?.accountId) startupSelection.current = null;
+  const requestedRoute = startupRoute(subPath, data?.workspaces ?? [], preferences, saved);
+  if (!subPath && data?.accountId && ownPreferences && personal?.verified && !startupSelection.current) {
+    startupSelection.current = { accountId: data.accountId, route: requestedRoute };
+  }
+  const route = subPath || startupSelection.current?.route || requestedRoute;
+  const cabinet = route === 'settings/account' || route.startsWith('settings/account/');
+  const active = route.split('/')[0];
+  const updatePreferences = personal?.update, lastWorkspace = preferences.lastWorkspaceId;
+  const recordedNavigation = useRef<string | null>(null);
+  useEffect(() => {
+    if (data?.accountId && personal?.snapshot && !ownPreferences) void personal.refresh();
+  }, [data?.accountId, personal?.snapshot?.accountId]);
+  useEffect(() => {
+    if (!data?.accountId || !ownPreferences || !personal?.verified || !updatePreferences) return;
+    const navigation = JSON.stringify([data.accountId, cabinet ? 'settings/account' : active]);
+    if (recordedNavigation.current === navigation) return;
+    recordedNavigation.current = navigation;
+    if (!cabinet && data.workspaces.some(item => item.id === active) && active !== lastWorkspace) {
+      void updatePreferences({ lastWorkspaceId: active }, data.accountId).catch(() => {});
+    }
+  }, [cabinet, data?.accountId, ownPreferences, personal?.verified, active, lastWorkspace, updatePreferences]);
+  const waitingPreferences = !subPath && data?.accountId && !ownPreferences && !personal?.error && !personal?.verified;
+  const preferencesMismatch = !subPath && data?.accountId && personal?.verified && !ownPreferences;
   return <div className="svb svb-workplace">
     <nav className="svb-contexts" aria-label="Рабочие контексты"><div className="svb-context-tabs">{data?.workspaces.map(item => <button key={item.id}
       className={!cabinet && active === item.id ? 'is-active' : ''} aria-current={!cabinet && active === item.id ? 'page' : undefined}
@@ -214,7 +244,9 @@ function WorkplaceRouter({ subPath = '' }: PluginNavPanelProps) {
       }}>{item.tabColor && <span className={`svb-tab-dot svb-tab-dot--${item.tabColor}`} aria-hidden="true" />}{item.name}</button>)}
       <button className={cabinet ? 'is-active' : ''} aria-current={cabinet ? 'page' : undefined} onClick={() => navigate.toPluginPanel('workplace', { subPath: 'settings/account' })}>Мой svaib</button>
     </div></nav>
-    {cabinet ? <div className="svb-kimi-cabinet"><RuntimePreparation /><KimiSetup /><AccountRouter subPath={subPath.slice('settings/account'.length).replace(/^\//, '')} production /></div> : <WorkplacePage key={data?.accountId ?? "local"} subPath={subPath} overview={overview} />}
+    {!cabinet && personal?.error && <p className="svb-feedback" role="status">Личные настройки: {personal.error}</p>}
+    {waitingPreferences ? <p className="svb-feedback" role="status">Загружаю рабочее место…</p> : preferencesMismatch ? <Feedback error="Аккаунт изменился. Обнови рабочее место." retry={() => { refresh(); void personal?.refresh(); }} /> : cabinet ? <AccountRouter subPath={route.slice('settings/account'.length).replace(/^\//, '')} production workspaces={data?.workspaces}
+      preparationPanels={<><PersonalRuntimePreparation accountId={data?.accountId} /><PersonalKimiSetup accountId={data?.accountId} /></>} /> : <WorkplacePage key={data?.accountId ?? "local"} subPath={route} overview={overview} />}
   </div>;
 }
 function WorkplacePage({ subPath = "", overview }: Partial<PluginNavPanelProps> & { overview: ReturnType<typeof useOverview> }) {
@@ -244,7 +276,7 @@ function WorkplacePage({ subPath = "", overview }: Partial<PluginNavPanelProps> 
     onSource: (sourceId: string) => go({ kind: "source", sourceId, returnTo: place }),
     onAction: (action: Action, context?: ActionContext) => go({ kind: "action", action, context, returnTo: place }),
   } : null;
-  if (data && !error && (!workspace || data.workspaces.length === 0)) return <div className="svb-kimi-cabinet"><RuntimePreparation /><KimiSetup /><AccountPage production /></div>;
+  if (data && !error && (!workspace || data.workspaces.length === 0)) return <AccountPage production workspaces={data.workspaces} preparationPanels={<><PersonalRuntimePreparation accountId={data.accountId ?? null} /><PersonalKimiSetup accountId={data.accountId ?? null} /></>} />;
   return <div className={`svb svb-workplace${view.kind === "thread" ? " svb-workplace-chat" : ""}`}>
     {view.kind === "thread" && workspace ? <div className="svb-conversation"><div className="svb-conversation-heading"><button className="svb-back" onClick={() => { refresh(); go(view.returnTo); }}><Glyph name="ArrowLeft" />{view.metricsRefresh ? "К графикам" : placeLabel(view.returnTo, workspace)}</button><span>{view.title}</span><button className="svb-text-button" onClick={() => navigate.toThread(view.threadId)}>Открыть разговор<Glyph name="ArrowUpRight" /></button></div><ThreadChat threadId={view.threadId} variant="full" layout="contained" permissionPolicy="inherit" className="svb-thread-chat" /></div> : <div className="svb-scroll" ref={scroll}><div className="svb-page">
       {data && error && <Feedback error={error} retry={refresh} />}
@@ -285,11 +317,11 @@ export default definePluginApp(app => {
   app.experimental_icons.register({ name: "svaib-workplace/brand", component: ({className}) => <svg className={className} viewBox="0 0 24 24" fill="none" aria-hidden="true"><text x="2" y="20" fontFamily="Montserrat, Inter, sans-serif" fontSize="25" fontWeight="800" fill="var(--svb-teal, #00B4A6)">s</text><circle cx="21" cy="19.5" r="2" fill="#FF4D8D"/></svg> });
   app.experimental_icons.register({ name: "svaib-workplace/compass", component: ({className}) => <Glyph name="Compass" className={className} /> });
   app.slots.navPanel({ id: "workplace", path: "workplace", title: "svaib", icon: "svaib-workplace/brand", component: WorkplaceRouter });
-  app.slots.settingsSection({ id: 'runtime-preparation', title: 'Подготовка компьютера', component: RuntimePreparation });
-  app.slots.settingsSection({ id: 'kimi-setup', title: 'Kimi: Claude Code или Pi', component: () => <KimiSetup settings /> });
+  app.slots.settingsSection({ id: 'runtime-preparation', title: 'Подготовка компьютера', component: () => <UserPreferencesProvider><PersonalRuntimePreparation settings /></UserPreferencesProvider> });
+  app.slots.settingsSection({ id: 'kimi-setup', title: 'Kimi: Claude Code или Pi', component: () => <UserPreferencesProvider><PersonalKimiSetup settings /></UserPreferencesProvider> });
   app.slots.experimental_tab({ ...contextTab, title: "Контекст", icon: "svaib-workplace/compass", component: FixedContextPanel, layout: "flush" });
   app.slots.homepageSection({ id: "workplace-home", title: "svaib · рабочее место", component: HomeSection });
   app.slots.experimental_tab({ context: { kind: "thread" }, availability: "action", id: "svaib-context", title: "Контекст svaib", icon: "svaib-workplace/compass", component: () => <ContextPanel />, layout: "flush" });
-  app.slots.experimental_tab({ context: { kind: 'thread' }, availability: 'action', id: 'svaib-screen', title: 'Screen', icon: 'PanelsTopLeft', component: ({ threadId }) => <ScreenPanel threadId={threadId} />, layout: 'flush' });
+  app.slots.experimental_tab({ context: { kind: 'thread' }, availability: 'action', id: 'svaib-screen', title: 'Screen', icon: 'PanelsTopLeft', component: ({ threadId }) => <UserPreferencesProvider><ScreenPanel threadId={threadId} /></UserPreferencesProvider>, layout: 'flush' });
   app.slots.experimental_threadContextSegment({ id: 'svaib-screen-launcher', title: 'Конструктор', group: 'svaib', summary: ScreenLauncher, useVisible: useScreenLauncher });
 });

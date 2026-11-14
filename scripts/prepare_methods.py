@@ -1,7 +1,8 @@
 """Copy this release's method marketplace to the selected provider's stable BB state.
 
-Run from the installed BB plugin. Native marketplace/plugin updates remain
-separate native CLI operations. This helper never reads OAuth or model config.
+Run from the installed BB plugin. For Pi, also prepare a verified, independent
+npm runtime before returning its packageRoot. Native registration remains a
+separate CLI operation. This helper never reads OAuth or model config.
 """
 
 import argparse
@@ -20,6 +21,7 @@ from pathlib import Path, PurePosixPath
 PLUGIN_ID = "svaib-workplace"
 MAX_BYTES = 32 * 1024 * 1024
 MAX_FILES = 1024
+PI_SUBAGENTS_VERSION = "0.87.0"
 
 
 class PreparationError(ValueError):
@@ -166,7 +168,7 @@ def _pi(files: dict[str, bytes], version: str) -> None:
         if (package.get("name") != "svaib-plugin" or package.get("version") != version
                 or package.get("pi") != {"extensions": [prefix + "pi/extension.ts"],
                                          "skills": [prefix + "skills"]}
-                or package.get("dependencies", {}).get("pi-subagents") != "0.87.0"):
+                or package.get("dependencies", {}).get("pi-subagents") != PI_SUBAGENTS_VERSION):
             raise PreparationError("Pi package identity or resources mismatch")
     for name in ("pi/extension.ts", "pi/child-extension.ts", "pi/delegation.ts", "pi/kimi-schema.ts", "pi/usage-snapshot.ts",
                  "hooks/bridge_pi.py", "hooks/usage_pi.py", "hooks/usage_log.py", "hooks/usage_claude.py",
@@ -244,8 +246,11 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
         parent = parent / segment
         _directory(parent)
     with _locked(parent / (".prepare-" + provider + ".lock")):
-        target = parent / provider
-        marker = parent / ("." + provider + ".owner.json")
+        # Old Pi installs can be npm links into methods/pi. Never switch their
+        # code behind their back, or replace a source used by a live session.
+        name = "pi-" + entry["version"] if provider == "pi" else provider
+        target = parent / name
+        marker = parent / ("." + name + ".owner.json")
         owner = {"schema": 1, "pluginId": PLUGIN_ID, "provider": provider,
                  "version": entry["version"], "sourceRevision": manifest.get("sourceRevision"),
                  "files": entry["files"]}
@@ -261,7 +266,7 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
                         "provider": provider, "changed": False}
             if old_version == new_version and old_owner.get("files") != entry["files"]:
                 raise PreparationError("Method content changed without a version increment")
-            if old_owner == owner:
+            if old_owner == owner or provider == "pi":
                 return {"marketplaceRoot": str(target), "version": entry["version"],
                         "provider": provider, "changed": False}
         temp = Path(tempfile.mkdtemp(prefix=".prepare-" + provider + "-", dir=parent))
@@ -294,17 +299,139 @@ def prepare(provider: str, data_dir: Path, *, source_root: Path | None = None) -
                 "provider": provider, "changed": True}
 
 
+PI_RUNTIME_PROBE = r"""
+const fs = require('node:fs'), path = require('node:path');
+const {createRequire} = require('node:module');
+const root = fs.realpathSync(process.argv[1]);
+const entry = fs.realpathSync(path.join(root, 'node_modules/svaib-plugin/plugins/svaib/pi/delegation.ts'));
+const inside = p => { const r = path.relative(root, fs.realpathSync(p));
+  if (r === '..' || r.startsWith('..' + path.sep) || path.isAbsolute(r)) throw Error('External dependency'); };
+inside(entry);
+const req = createRequire(entry);
+const main = req.resolve('pi-subagents');
+for (const name of ['pi-subagents', 'pi-subagents/required-child-extensions', 'pi-subagents/delegation']) inside(req.resolve(name));
+let dir = path.dirname(main), found = false;
+while (dir !== path.dirname(dir)) {
+  inside(dir);
+  const manifest = path.join(dir, 'package.json');
+  if (fs.existsSync(manifest)) {
+    const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (pkg.name === 'pi-subagents') { if (pkg.version !== process.argv[2]) throw Error('Wrong dependency version'); found = true; break; }
+  }
+  dir = path.dirname(dir);
+}
+if (!found) throw Error('Missing dependency manifest');
+console.log('svaib-pi-runtime-ok');
+"""
+
+
+def _run_runtime(command: list[str], cwd: Path, timeout: int, *, capture: bool = True) -> bytes:
+    # Installer output can contain registry credentials. Return only our probe
+    # marker to the caller; never echo npm output or command environment.
+    try:
+        result = subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE if capture else subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PreparationError("Pi runtime command failed; existing installation preserved") from error
+    if result.returncode:
+        raise PreparationError("Pi runtime command failed; existing installation preserved")
+    return (result.stdout or b"").strip()
+
+
+def prepare_pi_runtime(prepared: dict, data_dir: Path, node: Path, npm_cli: Path) -> dict:
+    """Publish a verified copy, never repair/overwrite an active npm tree.
+
+    The ready pointer is committed only after copy, hashes and dependency
+    resolution pass. Failed generations are left for diagnosis, never reused.
+    """
+    if not node.is_absolute() or not node.is_file() or not npm_cli.is_absolute() or not npm_cli.is_file():
+        raise PreparationError("Use absolute Node and npm-cli.js paths from the selected host")
+    if not data_dir.is_absolute() or data_dir.resolve() != data_dir or not data_dir.is_dir():
+        raise PreparationError("Use the canonical BB data directory")
+    node_version = _run_runtime([str(node), "-p", "process.versions.node"], data_dir, 5).decode()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", node_version) or tuple(map(int, node_version.split("."))) < (22, 19, 0):
+        raise PreparationError("Pi requires Node 22.19+")
+    version = prepared["version"]
+    _version(version)
+    parent = data_dir
+    for segment in ("plugins", PLUGIN_ID, "methods"):
+        parent = parent / segment
+        _directory(parent)
+    source = parent / ("pi-" + version)
+    if prepared.get("provider") != "pi" or prepared.get("marketplaceRoot") != str(source):
+        raise PreparationError("Expected the prepared versioned Pi source")
+    owner = _object(parent / (".pi-" + version + ".owner.json"))
+    if (owner.get("schema") != 1 or owner.get("pluginId") != PLUGIN_ID
+            or owner.get("provider") != "pi" or owner.get("version") != version):
+        raise PreparationError("Unexpected Pi source owner")
+    files = _snapshot(source, owner.get("files"))
+    _pi(files, version)
+    source_hash = hashlib.sha256(json.dumps(owner["files"], sort_keys=True).encode()).hexdigest()
+    runtimes = parent.parent / "pi-runtimes"
+    _directory(runtimes)
+    with _locked(runtimes / ".prepare.lock"):
+        ready = runtimes / ("." + version + ".ready.json")
+        identity = {"schema": 1, "pluginId": PLUGIN_ID, "version": version, "sourceHash": source_hash}
+
+        def verify(root: Path) -> None:
+            _snapshot(root / "node_modules/svaib-plugin", owner["files"])
+            if _run_runtime([str(node), "-e", PI_RUNTIME_PROBE, str(root), PI_SUBAGENTS_VERSION], root, 15) != b"svaib-pi-runtime-ok":
+                raise PreparationError("Pi dependency probe failed")
+
+        if ready.exists() or ready.is_symlink():
+            previous = _object(ready)
+            name = previous.get("directory", "")
+            if (set(previous) != set(identity) | {"directory"}
+                    or any(previous.get(k) != v for k, v in identity.items())
+                    or not isinstance(name, str) or not re.fullmatch(re.escape(version) + r"-[0-9a-f]{32}", name)):
+                raise PreparationError("Unexpected Pi runtime owner; existing files preserved")
+            root = runtimes / name
+            if root.is_symlink():
+                raise PreparationError("Symlink in Pi runtime path")
+            try:
+                verify(root)
+                return {**prepared, "runtimeRoot": str(root), "packageRoot": str(root / "node_modules/svaib-plugin"),
+                        "runtimeChanged": False}
+            except (ValueError, OSError):
+                pass  # A broken owned copy is retained; prepare a new generation.
+
+        root = runtimes / (version + "-" + uuid.uuid4().hex)
+        root.mkdir(mode=0o700)
+        # --install-links is explicit even if the user's npmrc disables it.
+        # No npm files or dependencies are ever written into checked methods.
+        _run_runtime([str(node), str(npm_cli), "install", "--prefix", str(root),
+                      "--cache", str(root / "npm-cache"), "--ignore-scripts", "--omit=dev",
+                      "--legacy-peer-deps", "--install-links", "--no-audit", "--no-fund", str(source)], root, 300, capture=False)
+        # Validate again after npm: the source must remain unmodified.
+        _snapshot(source, owner["files"])
+        verify(root)
+        temporary = runtimes / (".ready-" + uuid.uuid4().hex + ".json")
+        temporary.write_text(json.dumps({**identity, "directory": root.name}) + "\n", encoding="utf-8")
+        os.replace(temporary, ready)
+        return {**prepared, "runtimeRoot": str(root), "packageRoot": str(root / "node_modules/svaib-plugin"),
+                "runtimeChanged": True}
+
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", choices=("codex", "claude", "pi"), required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--node", type=Path, help="Pi only: absolute Node executable on the selected host")
+    parser.add_argument("--npm-cli", type=Path, help="Pi only: absolute npm/bin/npm-cli.js on the selected host")
     args = parser.parse_args()
     try:
         check_hook_runtime(args.provider)
+        if args.provider == "pi" and (args.node is None or args.npm_cli is None):
+            parser.error("Pi requires --node and --npm-cli to prepare a complete runtime")
         result = prepare(args.provider, args.data_dir)
+        if args.provider == "pi":
+            result = prepare_pi_runtime(result, args.data_dir, args.node, args.npm_cli)
     except HookRuntimeError as error:
         parser.exit(1, str(error))
+    except PreparationError as error:
+        parser.exit(1, str(error) + "\n")
     except (ValueError, OSError, KeyError, IndexError, TypeError):
         parser.exit(1, "Method preparation refused: source or owned destination validation failed.\n")
     print(json.dumps(result))

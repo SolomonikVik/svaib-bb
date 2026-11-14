@@ -5,10 +5,14 @@ import { runtimeProgressSchema, type RuntimeContext, type RuntimeView } from './
 import './kimi-setup.css';
 
 const providers = [['codex', 'Codex'], ['claude-code', 'Claude Code'], ['acp-claude-kimi', 'Kimi (Claude Code)'], ['pi', 'Pi']] as const;
+const visibilityKey = 'svaib.runtime-preparation.hidden';
 /** This surface needs neither a model nor a svaib login. Opening only probes. */
-export function RuntimePreparation() {
+export function RuntimePreparation({ settings = true, cabinetVisible, onVisibilityChange }: { settings?: boolean; cabinetVisible?: boolean; onVisibilityChange?(visible: boolean): Promise<void> }) {
   const rpc = useRpc<typeof runtimeSettingsContract>();
   const [hosts, setHosts] = useState<{ id: string; name: string }[]>([]);
+  const [hostsLoaded, setHostsLoaded] = useState(false);
+  const [dismissed, setDismissed] = useState(() => { try { return window.localStorage.getItem(visibilityKey) === 'true'; } catch { return false; } });
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [hostId, setHostId] = useState('');
   const [provider, setProvider] = useState<RuntimeContext['provider']>('codex');
   const [action, setAction] = useState<'dispatch' | 'install'>('dispatch');
@@ -23,7 +27,8 @@ export function RuntimePreparation() {
     rpc.call('runtimeHosts', null).then(result => {
       if (!live) return;
       setHosts(result.hosts); setHostId(result.primaryHostId ?? result.hosts[0]?.id ?? '');
-    }, () => { if (live) setError('Не удалось получить компьютеры BB. Повтори открытие настроек.'); });
+      setHostsLoaded(true);
+    }, () => { if (live) { setHostsLoaded(true); setError('Не удалось получить компьютеры BB. Повтори открытие настроек.'); } });
     return () => { live = false; epoch.current++; };
   }, [rpc]);
   const refresh = useCallback(async () => {
@@ -60,9 +65,25 @@ export function RuntimePreparation() {
     try { const next = await rpc.call('runtimeCancelPreparation', { hostId }); if (current === epoch.current) setView(next); }
     catch { if (current === epoch.current) setError('Не удалось подтвердить отмену. Проверь подключение компьютера.'); }
   }
-  return <section className="svb svb-kimi-settings" aria-label="Подготовка компьютера">
-    <h3>Подготовка компьютера</h3>
+  const hidden = cabinetVisible === undefined ? dismissed : !cabinetVisible;
+  async function setHidden(nextHidden: boolean) {
+    setVisibilityBusy(true);
+    try {
+      if (onVisibilityChange) await onVisibilityChange(!nextHidden);
+      setDismissed(nextHidden);
+      try { if (nextHidden && !onVisibilityChange) window.localStorage.setItem(visibilityKey, 'true'); else window.localStorage.removeItem(visibilityKey); } catch { /* Browser-only fallback is optional. */ }
+    } catch { setError('Не удалось сохранить видимость панели. Повтори действие.'); }
+    finally { setVisibilityBusy(false); }
+  }
+  // Settings always expose the controls. The cabinet stays quiet while a safe
+  // probe is pending or the selected launch is ready; dismissal only affects UI.
+  if (!settings && (hidden || (!view && !error && (!hostsLoaded || !!hostId)) || (view?.status === 'ready' && !view.installerUncertain && !busy))) return null;
+  return <section className="svb svaib-setup-panel svb-runtime" aria-label="Подготовка компьютера" aria-busy={busy}>
+    <div className="svaib-setup-panel-heading"><div><span className="svb-kicker">Рабочее место</span><h2>Подготовка компьютера</h2></div>
+      {!settings && <button className="svb-text-button" disabled={busy || visibilityBusy} onClick={() => { void setHidden(true); }}>Скрыть</button>}
+    </div>
     <p>Проверка компонентов для выбранного агента. Кнопка подготовки устанавливает недостающее; Windows может запросить разрешение.</p>
+    <div className="svb-runtime-fields">
     <label>Компьютер<select aria-label="Компьютер подготовки" value={hostId} disabled={busy} onChange={e => setHostId(e.target.value)}>
       {!hosts.length && <option value="">Нет подключённых компьютеров</option>}
       {hosts.map(host => <option key={host.id} value={host.id}>{host.name}</option>)}
@@ -73,15 +94,17 @@ export function RuntimePreparation() {
     <label>Действие<select aria-label="Действие подготовки" value={action} disabled={busy} onChange={e => setAction(e.target.value as 'dispatch' | 'install')}>
       <option value="dispatch">Обычный запуск</option><option value="install">Компоненты установщика</option>
     </select></label>
-    <p role="status">{busy ? progress : view?.message || 'Проверяю компоненты…'}</p>
+    </div>
+    <p role="status" className="svaib-setup-panel-note">{busy ? progress : view?.message || (hostsLoaded && !hostId ? 'Подключи компьютер в BB, чтобы проверить компоненты.' : 'Проверяю компоненты…')}</p>
     {view?.missing?.length ? <p>Не выполнено: {view.missing.map(key => ({ python: 'Python для хуков', bash: 'Git Bash', node: 'Node.js', npm: 'npm', bb: 'BB CLI', launcher: 'запуск выбранного агента' })[key]).join(', ')}.</p> : null}
     {view?.operationError && <p>Последняя подготовка: {view.operationError}</p>}
-    {error && <p role="alert">{error}</p>}
-    {view?.platform === 'win32' && action === 'install' && <label><input type="checkbox" checked={portableNode} disabled={busy} onChange={e => setPortableNode(e.target.checked)} />Переносимый Node, если он потребуется установщику</label>}
+    {error && <p role="alert" className="svaib-setup-panel-error">{error}</p>}
+    {view?.platform === 'win32' && action === 'install' && <label className="svaib-setup-panel-toggle"><input type="checkbox" checked={portableNode} disabled={busy} onChange={e => setPortableNode(e.target.checked)} />Переносимый Node, если он потребуется установщику</label>}
     <div className="svb-kimi-actions">
-      <button disabled={!hostId || busy} onClick={() => void refresh()}>Проверить</button>
-      <button disabled={!hostId || busy} onClick={() => void repair()}>Подготовить / Повторить</button>
-      {busy && <button onClick={() => void cancel()}>Отменить подготовку</button>}
+      <button className="svb-secondary-button" disabled={!hostId || busy} onClick={() => void refresh()}>Проверить</button>
+      <button className="svb-primary-button" disabled={!hostId || busy} onClick={() => void repair()}>Подготовить / Повторить</button>
+      {busy && <button className="svb-text-button" onClick={() => void cancel()}>Отменить подготовку</button>}
+      {settings && hidden && <button className="svb-text-button" disabled={visibilityBusy} onClick={() => { void setHidden(false); }}>Показывать в кабинете</button>}
     </div>
   </section>;
 }

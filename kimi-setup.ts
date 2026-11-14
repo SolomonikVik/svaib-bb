@@ -817,5 +817,6 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     kimiRecheck: async () => (await ready()).kimiRecheck(),
     kimiReplaceKey: async input => (await ready()).kimiReplaceKey(input),
   });
-  return { settled: async () => { await selecting; await cc.settled(); await nativePi.settled(); await managedPi.settled(); } };
+  return { status: async () => (await ready()).kimiStatus(),
+    settled: async () => { await selecting; await cc.settled(); await nativePi.settled(); await managedPi.settled(); } };
 }

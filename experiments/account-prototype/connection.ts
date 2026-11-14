@@ -34,6 +34,7 @@ const NORMAL_WORK_GUIDANCE = 'В обычном разговоре выполн�
   'Если сводка показывает незавершённые начальные этапы, коротко подсвети ближайший и продолжай поручение. Если без настройки нельзя выполнить само поручение, объясни зависимость и предложи нужное действие. ' +
   'Оставшиеся рабочие сценарии после начальных этапов не требуют напоминания при каждом старте. ' +
   'При поручении продолжить настройку svaib или шаг кабинета прочитай svaib-workplace-connect; после работающего native MCP — svaib:onboarding. Сохраняй работающие BB, модель, плагины и входы.';
+const AUTH_GUIDANCE = 'Для авторизации MCP прочитай svaib-workplace-connect: сам открой вход и включи svaib_connect_wait. Не проси «готово» или /mcp. При паузе или смене задачи отмени ожидание через action=cancel.';
 const ACTIVE_ONBOARDING_GUIDANCE = 'Уже порученный онбординг продолжай после каждого ответа до завершения начальных этапов по свежим company marks: connect, space, profile, zone, first-work = done. Фаза BB этого не доказывает. Пауза или смена задачи останавливает путь. Настройку и проверку MCP продолжай здесь; техническое обновление инструментов выполняется средствами харнеса без отдельного этапа svaib.';
 
 const connectionTools = (provider: string) => [START_TOOL, BEGIN_TOOL, WAIT_TOOL,
@@ -56,7 +57,7 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
   // The explicit start tool captures the current source; availability starts nothing.
   const metadata = connectionMetadataSchema.safeParse(context.pluginMetadata);
   if ((context.origin.pluginId !== pluginId || context.origin.kind !== null) && (!metadata.success || !metadata.data.inPlace))
-    return { tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL], instructions: NORMAL_WORK_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE };
+    return { tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL], instructions: NORMAL_WORK_GUIDANCE + ' ' + AUTH_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE };
   const unsupported = { ...empty, skills: [CONNECTION_SKILL], instructions: 'Служебная привязка BB-подключения недоступна или не совпадает с текущим разговором. Не управляй прежним OAuth-процессом и не переноси его данные. Это не запрещает явно порученную настройку native MCP в фактическом текущем рабочем месте по скиллу svaib-workplace-connect. Проверь реальный CLI, профиль и сохранённый вход; отдельный flow или проверочный разговор для этого не нужен.' };
   if (!metadata.success) return unsupported;
   if (metadata.data.successorThreadId) return { ...unsupported, instructions: unsupported.instructions + ` У прежнего подключения есть разговор @thread:${metadata.data.successorThreadId}; это источник истории, а не обязательный переход. Явно порученную настройку native MCP продолжай здесь.` };
@@ -70,7 +71,7 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
       continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId),
   };
   if (metadata.data.phase === 'work') return { tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL], instructions:
-    NORMAL_WORK_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE + ' ' + continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId) };
+    NORMAL_WORK_GUIDANCE + ' ' + AUTH_GUIDANCE + ' ' + ACTIVE_ONBOARDING_GUIDANCE + ' ' + continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId) };
   if (metadata.data.continuation) {
     try { checkContinuation(metadata.data.continuation, context.project.id, context.environment.id); }
     catch { return { ...unsupported, instructions: unsupported.instructions + ' Сохранённый пакет поручения относится к другой среде: не используй его как выбор компании, папки или разрешение на запись. Текущее явное поручение человека сохраняется.' }; }

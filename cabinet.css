@@ -1,0 +1,76 @@
+@import "./assets/fonts/fonts.css";
+
+/* Shared cabinet and setup controls. Host colors keep light/custom/dark themes. */
+:where(.svaib-account, .svaib-setup-panel, .svb-kimi-settings) {
+  --svaib-ink: var(--foreground, #2c3e50);
+  --svaib-muted: var(--muted-foreground, #6b7280);
+  --svaib-bg: var(--background, #fafbfc);
+  --svaib-line: color-mix(in srgb, var(--svaib-ink) 13%, transparent);
+  --svaib-accent: color-mix(in srgb, #00b4a6 72%, var(--svaib-ink));
+  --svaib-action: color-mix(in srgb, #008b7f 90%, #1a1a1a);
+  --svaib-soft: color-mix(in srgb, #00b4a6 7%, var(--svaib-bg));
+  color: var(--svaib-ink);
+  font-family: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+:where(.svaib-account, .svaib-setup-panel) *, :where(.svaib-account, .svaib-setup-panel) *::before, :where(.svaib-account, .svaib-setup-panel) *::after { box-sizing: border-box; }
+:where(.svaib-account, .svaib-setup-panel) button { font: inherit; cursor: pointer; }
+:where(.svaib-account, .svaib-setup-panel) button:disabled { opacity: .5; cursor: not-allowed; }
+:where(.svaib-account, .svaib-setup-panel) :is(button, a, summary, input, select, textarea):focus-visible { outline: 2px solid var(--svaib-accent); outline-offset: 4px; }
+:where(.svaib-account, .svaib-setup-panel) :is(input, select, textarea) { font: inherit; accent-color: var(--svaib-action); }
+
+.svaib-account .svaib-account-button, .svaib-account .svaib-journey-action, .svaib-setup-panel .svb-primary-button, .svaib-setup-panel .svb-secondary-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; max-width: 100%; margin: 0; padding: 9px 16px;
+  border: 1px solid var(--svaib-line); border-radius: 9px;
+  background: transparent; color: var(--svaib-ink); font-size: 13px; font-weight: 550;
+  line-height: 1.5; text-align: center; text-decoration: none;
+}
+.svaib-account .svaib-journey-action, .svaib-account .svaib-account-primary, .svaib-setup-panel .svb-primary-button {
+  border-color: transparent; background: var(--svaib-action); color: #fff;
+}
+.svaib-setup-panel .svb-primary-button, .svaib-setup-panel .svb-secondary-button { font-size: 13px !important; }
+.svaib-account-button:hover:not(:disabled), .svaib-setup-panel .svb-secondary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--svaib-ink) 5%, transparent); }
+.svaib-journey-action:hover:not(:disabled), .svaib-account-primary:hover:not(:disabled), .svaib-setup-panel .svb-primary-button:hover:not(:disabled) { filter: brightness(1.08); }
+.svaib-setup-panel .svb-text-button, .svb-kimi-settings .svb-text-button {
+  min-height: 40px; margin: 0; padding: 8px 0; border: 0; background: none;
+  color: var(--svaib-accent); font: inherit; font-size: 13px !important;
+  font-weight: 550; line-height: 1.5; text-align: left; cursor: pointer;
+}
+.svaib-setup-panel .svb-text-button:hover, .svb-kimi-settings .svb-text-button:hover { text-decoration: underline; text-underline-offset: 4px; }
+.svaib-account-company select, .svaib-setup-panel :is(input:not([type="checkbox"]), select, textarea) {
+  display: block; width: 100%; min-width: 0; max-width: 100%; min-height: 42px;
+  box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--svaib-line); border-radius: 9px;
+  background: var(--svaib-bg); color: var(--svaib-ink); font: inherit;
+}
+.svaib-account-company select:disabled, .svaib-setup-panel :is(input, select, textarea):disabled { opacity: .55; }
+
+.svaib-setup-panel {
+  width: 100%; min-width: 0; margin: 0; padding: 24px;
+  border: 0; border-radius: 12px; background: var(--svaib-soft);
+}
+.svaib-setup-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.svaib-setup-panel-heading > div { min-width: 0; }
+.svaib-setup-panel-heading > button { flex-shrink: 0; }
+.svaib-setup-panel .svb-kicker { color: var(--svaib-muted); font-size: 10px; letter-spacing: .1em; font-weight: 600; text-transform: uppercase; }
+.svaib-setup-panel h2 { margin: 4px 0 0; font-family: Montserrat, Inter, sans-serif; font-size: 19px; font-weight: 600; line-height: 1.4; letter-spacing: -.025em; }
+.svaib-setup-panel p { margin: 12px 0 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.svaib-setup-panel label { display: grid; gap: 8px; min-width: 0; margin-top: 16px; font-size: 13px; font-weight: 550; }
+.svaib-setup-panel form { display: grid; gap: 12px; }
+.svaib-setup-panel form > label { margin-top: 0; }
+.svaib-setup-panel form .svb-primary-button { justify-self: start; }
+.svaib-setup-panel form > p { margin-bottom: 0; }
+.svaib-setup-panel > .svb-primary-button { margin-top: 16px; }
+.svb-runtime-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.svaib-setup-panel .svaib-setup-panel-note, .svaib-setup-panel .svb-kimi-note { color: var(--svaib-muted); font-size: 12px; }
+.svaib-setup-panel .svaib-setup-panel-error { color: var(--destructive, var(--svaib-ink)); border-left: 2px solid currentColor; padding-left: 12px; }
+.svaib-setup-panel .svaib-setup-panel-toggle { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; }
+.svaib-setup-panel-toggle input { width: 18px; height: 18px; flex: 0 0 18px; margin: 2px 0 0; }
+.svb-kimi-settings { padding: 8px 0; }
+@media (max-width: 600px) {
+  .svaib-setup-panel { padding: 20px; }
+  .svb-runtime-fields { grid-template-columns: 1fr; gap: 0; }
+  .svaib-setup-panel h2 { font-size: 18px; }
+}

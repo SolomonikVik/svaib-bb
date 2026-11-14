@@ -16,6 +16,7 @@ import { HOOK_TOOL } from './hook-bundle';
 import { comparisonSchema, createNativeObservation, nativeObservationInputSchema } from './native-observation';
 import { onboardingViewSchema } from './contracts';
 import { supportsConnection } from './connection-providers';
+import { AuthContinuation, authWaitSchema } from './auth-continuation';
 
 export const rpcContract = defineRpcContract({
   observeNativeAccount: { input: nativeObservationInputSchema, output: z.object({ recorded: z.literal(true) }).strict() },
@@ -65,14 +66,18 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
   if (endpoints.resource !== 'https://api.svaib.com/mcp' || apiBase !== 'https://api.svaib.com') throw new Error('production_resource_required');
   const browser = bb.hosts.experimental_client({ contract: browserContract });
   const reviewHooks = createHookConsent(bb);
+  const nativePython = async (hostId: string) => {
+    const view = await browser.call('runtimePrepare', { context: { provider: 'codex', action: 'setup', hooks: true }, retry: true }, { hostId, timeoutMs: 35 * 60_000 });
+    if (view.status !== 'ready' || !view.python) throw new Error(view.message);
+    return { executable: view.python, ...(view.path ? { path: view.path } : {}) };
+  };
+  const auth = new AuthContinuation({ sdk: bb.sdk, kv: bb.storage.kv, pluginId: bb.pluginId, python: nativePython });
+  await auth.load();
+  bb.onDispose(() => auth.dispose());
   flow = new ConnectFlow({ sdk: bb.sdk, kv: bb.storage.kv, pluginId: bb.pluginId,
     account: () => account.view(), begin: () => oauth.begin(), cancel: () => oauth.cancel(), restartPending: epoch => oauth.restartPending(epoch), epoch: () => oauth.epoch, changed,
     open: async (url, hostId, signal) => { await browser.call('openLogin', { url }, { hostId, signal }); },
-    nativePython: async hostId => {
-      const view = await browser.call('runtimePrepare', { context: { provider: 'codex', action: 'setup', hooks: true }, retry: true }, { hostId, timeoutMs: 35 * 60_000 });
-      if (view.status !== 'ready' || !view.python) throw new Error(view.message);
-      return { executable: view.python, ...(view.path ? { path: view.path } : {}) };
-    },
+    nativePython,
     validateWorkspaceMove: options.validateWorkspaceMove,
     identity: account.workplaceIdentity.bind(account),
   });
@@ -91,17 +96,19 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
       if (result.threadId) await bb.sdk.threads.open({ threadId: result.threadId, file: null });
       return JSON.stringify(result);
     } });
-  bb.agents.registerTool({ name: WAIT_TOOL, description: 'Ожидает завершение OAuth-процесса без чтения вывода. После завершения проверь MCP здесь; новый разговор автоматически не создаётся.', parameters: z.object({ terminalId: z.string().regex(/^term_[a-z0-9]+$/), continuation: continuationInputSchema.optional() }).strict(),
-    execute: async ({ terminalId, continuation }, ctx) => JSON.stringify(await connection.waitForMcp(terminalId, ctx, continuation)),
+  bb.agents.registerTool({ name: WAIT_TOOL, description: 'Самостоятельно наблюдает native OAuth в фоне и продолжает этот разговор после входа, без «готово» от пользователя. Сразу после запуска CLI передай terminalId и проверенный serverKey; action=status проверяет ожидание, action=cancel отменяет продолжение. Вывод терминала не читается; доступ подтверждает настоящий MCP whoami.', parameters: authWaitSchema,
+    execute: async (input, ctx) => JSON.stringify(await auth.wait(input, ctx)),
   });
   bb.agents.registerTool({ name: NATIVE_TOOL, description: 'Открывает управляемый штатный вход Codex в проверенном локальном профиле; backend сам создаёт один принадлежащий подключению терминал. Возвращает только terminalId. OAuth URL и токены в модель не попадают.',
-    parameters: nativeStartSchema, execute: async (input, ctx) => JSON.stringify(await connection.startNative(input, ctx)) });
-  bb.events.on('thread.failed', ({ thread }) => connection.failed(thread.id));
-  bb.events.on('thread.deleted', ({ thread }) => connection.deleted(thread.id));
+    parameters: nativeStartSchema, execute: async (input, ctx) => JSON.stringify(await auth.start(input, ctx)) });
+  bb.events.on('thread.failed', async ({ thread }) => { await auth.cancel(thread.id); await connection.failed(thread.id); });
+  bb.events.on('thread.deleted', async ({ thread }) => { await auth.cancel(thread.id); await connection.deleted(thread.id); });
+  bb.events.on('thread.archived', ({ thread }) => auth.cancel(thread.id));
   let disposed = false;
   bb.onDispose(() => { disposed = true; });
   bb.events.on('thread.idle', async ({ thread }) => {
     if (disposed || thread.status !== 'idle' || thread.deletedAt || !thread.environmentId) return;
+    await auth.tick();
     // Native MCP can update account/membership progress in any ordinary chat.
     // Idle only invalidates the shared cabinet; fresh server data decides stages.
     // No thread contents, binding, or historical connection receipt authorizes it.
@@ -128,7 +135,7 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
       await bb.storage.kv.set('cabinet:company:' + id, company_id);
       return null;
     },
-    observeNativeAccount: input => nativeObservation.record(input),
+    observeNativeAccount: async input => { const result = await nativeObservation.record(input); await auth.confirmed(input.threadId); return result; },
     compareNativeAccount: () => nativeObservation.compare(),
     connectionThread: async ({ threadId }) => {
       const thread = await bb.sdk.threads.get({ threadId });
@@ -168,7 +175,7 @@ export async function registerAccountModule(bb: AccountModuleApi, options: Accou
     },
   });
   return {
-    account, connection, nativeObservation, configure,
+    account, connection, nativeObservation, configure, admitAuth: auth.admit.bind(auth),
     epoch: () => oauth.epoch,
     verifiedCompany: account.verifiedCompany.bind(account),
     callMcpForContext: account.callMcpForContext.bind(account),

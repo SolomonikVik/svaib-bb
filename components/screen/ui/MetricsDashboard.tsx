@@ -151,15 +151,34 @@ export type MetricDiscussion = {
   periods: string[]; seriesIds: string[]; showPlan: boolean;
 };
 
-function SelectedMetric({ metric, onDiscuss }: { metric: DashboardMetric; onDiscuss?: (context: MetricDiscussion) => void }) {
+export type MetricViewPreference = { table: boolean; showPlan: boolean };
+/** The host owns persistence and identity; this renderer only reads display choices. */
+export type MetricPreferences = { ready?: boolean; read(metricId: string): MetricViewPreference | undefined; write(metricId: string, changes: Partial<MetricViewPreference>): void | Promise<void> };
+
+function SelectedMetric({ metric, onDiscuss, preferences }: { metric: DashboardMetric; onDiscuss?: (context: MetricDiscussion) => void; preferences?: MetricPreferences }) {
+  const saved = preferences?.read(metric.id);
+  const preferencesLoading = preferences?.ready === false;
   const [mode, setMode] = useState<MetricMode>('months');
-  const [table, setTable] = useState(false);
+  const [table, setTable] = useState(saved?.table ?? false);
   const initialScope = metric.series.some(series => series.scope === 'total') ? 'total' : 'unit';
   const [scope, setScope] = useState<MetricScope>(initialScope);
   const [selectedUnits, setSelectedUnits] = useState<string[]>(metric.series.filter(series => series.scope === 'unit').map(series => series.id));
   const years = availableYears(metric);
   const [year, setYear] = useState(years[0] ?? String(new Date(metric.source.verifiedAt).getFullYear()));
-  const [showPlan, setShowPlan] = useState(false);
+  const [showPlan, setShowPlan] = useState(saved?.showPlan ?? false);
+  const pendingChoices = useRef({ table: 0, showPlan: 0 });
+  function remember(changes: Partial<MetricViewPreference>) {
+    if (!preferences) return;
+    const fields = Object.keys(changes) as (keyof MetricViewPreference)[];
+    for (const field of fields) pendingChoices.current[field]++;
+    void Promise.resolve(preferences.write(metric.id, changes)).catch(() => {}).finally(() => {
+      for (const field of fields) pendingChoices.current[field]--;
+    });
+  }
+  useEffect(() => {
+    if (saved?.table !== undefined && !pendingChoices.current.table && saved.table !== table) { setTable(saved.table); setVisibleWindow(null); }
+    if (saved?.showPlan !== undefined && !pendingChoices.current.showPlan && saved.showPlan !== showPlan) setShowPlan(saved.showPlan);
+  }, [saved?.table, saved?.showPlan]);
   const [showGrowth, setShowGrowth] = useState(false);
   const scoped = metric.series.filter(series => series.scope === scope);
   const selected = scoped.filter(series => scope === 'total' || selectedUnits.includes(series.id));
@@ -188,14 +207,15 @@ function SelectedMetric({ metric, onDiscuss }: { metric: DashboardMetric; onDisc
     <p className="svb-md-description">{metric.description}</p>
     <div className="svb-md-mode-row">
       <div className="svb-md-segments" role="group" aria-label="Период представления">{MODES.map(item => <button key={item.id} type="button" aria-pressed={mode === item.id} onClick={() => setMode(item.id)}>{item.label}</button>)}</div>
-      <div className="svb-md-view-switch" role="group" aria-label="Вид представления"><button type="button" aria-pressed={!table} onClick={() => { setVisibleWindow(null); setTable(false); }}>График</button><button type="button" aria-pressed={table} onClick={() => { setVisibleWindow(null); setTable(true); }}>Таблица</button></div>
+      <div className="svb-md-view-switch" role="group" aria-label="Вид представления"><button type="button" disabled={preferencesLoading} aria-pressed={!table} onClick={() => { setVisibleWindow(null); setTable(false); remember({ table: false }); }}>График</button><button type="button" disabled={preferencesLoading} aria-pressed={table} onClick={() => { setVisibleWindow(null); setTable(true); remember({ table: true }); }}>Таблица</button></div>
     </div>
     <div className="svb-md-filter-row">
       {hasTotals && hasUnits ? <div className="svb-md-scope" role="group" aria-label="Охват показателя"><button type="button" aria-pressed={scope === 'total'} onClick={() => setScope('total')}>Весь бизнес</button><button type="button" aria-pressed={scope === 'unit'} onClick={() => setScope('unit')}>По точкам</button></div> : <span className="svb-md-scope-label">{scope === 'total' ? scoped[0]?.label || 'Весь бизнес' : 'По точкам'}</span>}
       {mode === 'year' && <label className="svb-md-year">Год <select value={year} onChange={event => setYear(event.target.value)}>{(years.length ? years : [year]).map(value => <option key={value} value={value}>{value}</option>)}</select><span>к {Number(year) - 1}</span></label>}
-      {hasPlan && (table || mode !== 'year' || selected.length === 1) && <label className="svb-md-plan"><input type="checkbox" checked={showPlan} onChange={event => setShowPlan(event.target.checked)} />План</label>}
+      {hasPlan && (table || mode !== 'year' || selected.length === 1) && <label className="svb-md-plan"><input type="checkbox" disabled={preferencesLoading} checked={showPlan} onChange={event => { setShowPlan(event.target.checked); remember({ showPlan: event.target.checked }); }} />План</label>}
       {mode === 'year' && !table && <label className="svb-md-growth" title="Изменение к тому же месяцу прошлого года; неполные периоды не сравниваются"><input type="checkbox" checked={showGrowth} onChange={event => setShowGrowth(event.target.checked)} />Рост</label>}
     </div>
+    {preferencesLoading && <p role="status" className="svb-md-snapshot-note">Вид можно изменить после загрузки личных настроек.</p>}
     {scope === 'unit' && <div className="svb-md-unit-picks" role="group" aria-label="Точки на графике">{scoped.map((series, index) => <button type="button" key={series.id} aria-pressed={selectedUnits.includes(series.id)} onClick={() => toggleUnit(series.id)}><i className={`svb-md-dot svb-md-color-${index % 5}`} />{series.label}</button>)}</div>}
     {mode === 'current' && operational && <>
       <div className="svb-md-operational-head"><span>{monthLabel(operational.period, true)}</span><span className="svb-md-badge">Неполный месяц · по {dayLabel(operational.through)}</span></div>
@@ -225,7 +245,7 @@ function SelectedMetric({ metric, onDiscuss }: { metric: DashboardMetric; onDisc
   </section>;
 }
 
-export default function MetricsDashboardPanel({ data, onRefresh, refreshUnavailable, embedded = false, onDiscuss }: { data: MetricsDashboard; onRefresh?: () => void; refreshUnavailable?: string; embedded?: boolean; onDiscuss?: (context: MetricDiscussion) => void }) {
+export default function MetricsDashboardPanel({ data, onRefresh, refreshUnavailable, embedded = false, onDiscuss, preferences }: { data: MetricsDashboard; onRefresh?: () => void; refreshUnavailable?: string; embedded?: boolean; onDiscuss?: (context: MetricDiscussion) => void; preferences?: MetricPreferences }) {
   const [selectedId, setSelectedId] = useState(data.metrics[0]?.id ?? '');
   const selected = data.metrics.find(metric => metric.id === selectedId) ?? data.metrics[0];
   if (!selected) return null;
@@ -234,7 +254,7 @@ export default function MetricsDashboardPanel({ data, onRefresh, refreshUnavaila
     <p className="svb-md-intro">{data.description}</p>
     <div className="svb-md-cards" aria-label="Выбор показателя">{data.metrics.map(metric => <MetricCard key={metric.id} metric={metric} selected={metric.id === selected.id} onSelect={() => setSelectedId(metric.id)} />)}</div>
     <p className="svb-md-cards-caption">Карточки — последний доступный месячный факт без незавершённых периодов. Выбери показатель, чтобы раскрыть историю.</p>
-    <SelectedMetric key={selected.id} metric={selected} onDiscuss={onDiscuss} />
+    <SelectedMetric key={selected.id} metric={selected} onDiscuss={onDiscuss} preferences={preferences} />
     {data.notes.length > 0 && <details className="svb-md-dashboard-notes"><summary>Источники и важные оговорки</summary>{data.notes.map((note, index) => <p key={index}>{note}</p>)}</details>}
     <p className="svb-md-snapshot-note">Подготовленный снимок. Автоматическое обновление не включено.</p>
   </section>;

@@ -1,4 +1,4 @@
-import type { BbPluginApi } from '@get-bb/plugin-sdk';
+import type { BbPluginApi, MessageDispatchHookContext, MessageDispatchHookDecision } from '@get-bb/plugin-sdk';
 import { browserContract } from './experiments/account-prototype/browser-contract';
 import { connectionProviders, supportsConnection, type ConnectionProvider } from './experiments/account-prototype/connection-providers';
 import { runtimeSignals, type RuntimeContext, type RuntimeView } from './runtime-contract';
@@ -9,6 +9,7 @@ export function registerRuntimeGate(bb: BbPluginApi) {
   const client = bb.hosts.experimental_client({ contract: browserContract, experimental_signals: runtimeSignals });
   const probes = new Map<string, Promise<RuntimeView>>(), jobs = new Map<string, Promise<RuntimeView>>();
   const abort = new AbortController(); bb.onDispose(() => abort.abort());
+  let admission: ((context: MessageDispatchHookContext) => Promise<MessageDispatchHookDecision>) | undefined;
   bb.onDispose(client.experimental_onSignal('runtimeProgress', ({ hostId, payload }) => {
     bb.realtime.publish('runtime-preparation-changed', { hostId, progress: payload });
     // Signals report operation progress, never grant readiness to another provider.
@@ -52,11 +53,12 @@ export function registerRuntimeGate(bb: BbPluginApi) {
     jobs.set(key, job); return job;
   };
   bb.experimental_hooks.on('message.dispatch', async context => {
+    const admit = async (): Promise<MessageDispatchHookDecision> => admission ? admission(context) : { action: 'proceed' };
     const provider = context.thread.providerId;
-    if (!supportsConnection(provider) || !context.host || context.attempt === 'join-turn') return { action: 'proceed' };
+    if (!supportsConnection(provider) || !context.host || context.attempt === 'join-turn') return admit();
     try {
       const view = await inspect(context.host.id, { provider, action: 'dispatch', hooks: true });
-      if (view.status === 'ready') return { action: 'proceed' };
+      if (view.status === 'ready') return admit();
       return { action: 'reject', message: `${view.message} Открой настройки плагина svaib → «Подготовка компьютера», выбери этот компьютер и ${provider}, затем нажми «Подготовить / Повторить».` };
     } catch {
       return { action: 'reject', message: 'Не удалось проверить компьютер исполнения. Открой настройки плагина svaib → «Подготовка компьютера» и повтори безопасную проверку. Установка запускается кнопкой «Подготовить / Повторить».' };
@@ -80,6 +82,7 @@ export function registerRuntimeGate(bb: BbPluginApi) {
     runtimeCancelPreparation: ({ hostId }) => client.call('runtimeCancel', null, { hostId, timeoutMs: 15_000 }),
   });
   return {
+    setAdmissionGuard(guard: NonNullable<typeof admission>) { admission = guard; },
     commands: [{ name: 'runtime', summary: 'Проверить или явно подготовить компьютер для выбранного провайдера',
       usage: 'bb svaib-workplace runtime status|prepare|cancel [--provider codex|claude-code|acp-claude-kimi|pi] [--action dispatch|setup|install|cli] [--portable-node] [--host <id>]' }],
     async run(argv: string[], signal?: AbortSignal) {

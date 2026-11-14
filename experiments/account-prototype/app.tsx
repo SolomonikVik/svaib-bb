@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { definePluginApp, useBbNavigate, useRpc, useRealtime } from '@get-bb/plugin-sdk/app';
 import type { rpcContract } from './account-module';
 import { accountIdentity, hasCompanyMembership, type AccountView, type OnboardingView } from './contracts';
@@ -13,12 +14,16 @@ import { cacheCabinetSnapshot, clearCabinetSnapshots, readCabinetSnapshot } from
 import { CompanyList, clearCompanyDirectories } from '../../CompanyList';
 import { clearWorkplaceOverview, readWorkplaceOverview } from '../../workplace-ui-cache';
 import './app.css';
+import '../../cabinet.css';
+import { UserSettings } from '../../UserSettings';
+import { useUserPreferences } from '../../UserPreferences';
 import './onboarding-journey.css';
 
 const progressCache = new Map<string, OnboardingView>();
 
-export function AccountPage({ production = false }: { production?: boolean } = {}) {
+export function AccountPage({ production = false, preparationPanels, workspaces = [] }: { production?: boolean; preparationPanels?: ReactNode; workspaces?: { id: string; name: string }[] } = {}) {
   const rpc = useRpc<typeof rpcContract>();
+  const personal = useUserPreferences();
   const navigate = useBbNavigate();
   const [cached] = useState(() => readCabinetSnapshot(production));
   const [view, setView] = useState<AccountView | null>(cached?.view ?? null);
@@ -153,68 +158,66 @@ export function AccountPage({ production = false }: { production?: boolean } = {
     accountProgress, progress });
   const setupComplete = setup.every(step => step.state === 'done');
   const next = progress?.status === 'available' ? nextOnboardingStages(catalog, progress.onboarding, progress.role) : null;
-  return <div className="svaib-account-viewport"><main className="svaib-account">
-    <header><span className="svaib-account-mark">s.</span><div><p className="svaib-account-eyebrow">{production ? 'svaib' : 'Тестовый контур · Staging'}</p><h1>Моё рабочее место</h1></div></header>
-    <p className="svaib-account-note">{production ? 'Работа с партнёром и твоими компаниями.' : 'Прототип для локального BB. Одно подключение svaib на весь BB-сервер; оно доступно всем его окнам.'}</p>
-    {refreshing && view && <p className="svaib-account-note" role="status">Обновляю данные…</p>}
-    {production && view?.me?.account_id && <CompanyList key={view.me.account_id} accountId={view.me.account_id} companies={companies}
-      selectedCompanyId={companyId} verified={verified} onSelect={async id => {
-        await rpc.call('selectCompany', { company_id: id });
-        if (id !== companyId) { setVerified(false); setProgress(null); setCompanyId(id); }
-      }} onConnect={company => navigate.toCompose({ initialPrompt: `Помоги подключить компанию и подготовить её пространство svaib. Компания: ${company.name} (ID: ${company.companyId}). Сохрани готовые входы, материалы и уже пройденные этапы. Помоги выбрать постоянную рабочую папку и проверь её перед добавлением вкладки.`, focusPrompt: false })} />}
-    {companyId && <p className="svaib-account-note">Настройка компании: {companies.find(c => c.company_id === companyId)?.company_name || companies.find(c => c.company_id === companyId)?.tenant_name || companyId}</p>}
-      {view?.state === 'signed-out' ? <section className="svaib-journey"><h2>Твой путь</h2><p>Войди в svaib, чтобы продолжить настройку и выбрать компанию.</p>
-        <button className="svaib-journey-action" disabled={busy} onClick={() => void act(async () => { await rpc.call('startCabinetLogin'); await refresh(); })}>Войти в svaib</button></section> :
-      view?.state === 'waiting' ? <p role="status">Заверши вход в открывшемся браузере.</p> :
-      !selectionLoaded || !progress ? <p role="status">Проверяю этапы…</p> : progress.status === 'unavailable' ?
-        <section className="svaib-journey"><h2>Твой путь</h2>
-          <p role="status">Не удалось загрузить этапы. Можно продолжить работу с партнёром.</p>
-          <button type="button" className="svaib-journey-action" onClick={() => continueJourney()}>Продолжить</button>
-        </section> :
-        <OnboardingJourney setup={setup} setupComplete={setupComplete} busy={busy || !verified}
-          nextSteps={next?.stages.map(stage => ({ id: stage.id, title: stage.title, state: stage.state ?? 'next' })) ?? []}
-          stagesAvailable={next?.status === 'available'} onContinue={continueJourney} />}
-    {error && <p role="alert" className="svaib-account-error">{error}</p>}
-    {!view ? !error && <p role="status">Проверяю подключение…</p> : <>
-      {view.message && <p role="status">{view.message}</p>}
-      {view.state === 'waiting' && connection?.stage !== 'cabinet' && <section><h2>Вход ожидает подтверждения</h2>
-        <p>Подтверди его в уже открытом браузере или отмени незавершённый вход.</p>
-        <button className="svaib-account-button" disabled={busy} onClick={() => void act(async () => { await rpc.call('cancelLogin'); await refresh(); })}>Отменить вход</button>
-      </section>}
-      {view.me && <section><p className="svaib-account-eyebrow">Аккаунт svaib</p><h2>{view.me.display_name || view.me.subject_id}</h2>
-        {comparison === 'match' && <p role="status">Последний вход партнёра и кабинет: один аккаунт.</p>}
-        {comparison === 'mismatch' && <p role="alert">В кабинете и у партнёра разные аккаунты. Чтобы сверить их, войди в нужный аккаунт.</p>}
+  const selectedCompanyName = companies.find(c => c.company_id === companyId)?.company_name || companies.find(c => c.company_id === companyId)?.tenant_name || companyId;
+  const displayName = view?.me?.display_name || view?.me?.subject_id;
+  const initials = (displayName || 's').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+  return <div className="svaib-account-viewport"><main className="svaib-account" aria-label="Мой svaib">
+    {preparationPanels && <div className="svaib-account-preparation">{preparationPanels}</div>}
+    <section className="svaib-account-identity" aria-label="Аккаунт svaib">
+      <div className="svaib-account-section-heading"><p className="svaib-account-eyebrow">{production ? 'Личный кабинет' : 'Тестовый контур · Staging'}</p>
+        {refreshing && view && <span className="svaib-account-note" role="status">Обновляю данные…</span>}
+      </div>
+      <div className="svaib-account-person"><span className="svaib-account-avatar" aria-hidden="true">{initials}</span><div>
+        <h1>{displayName || (view?.state === 'signed-out' ? 'Твой аккаунт svaib' : 'Мой svaib')}</h1>
+        <p className="svaib-account-note">{view?.state === 'connected' ? 'Аккаунт svaib подключён' : view?.state === 'waiting' ? 'Заверши вход в открывшемся браузере.' : view?.state === 'signed-out' ? 'Войди, чтобы работать с партнёром и своими компаниями.' : 'Проверяю подключение…'}</p>
+      </div></div>
+      {view?.me && <div className="svaib-account-identity-detail">
+        {hasCompanyMembership(view.me)
+          ? <p>{view.me.tenant_name || view.me.tenant_id} · {view.me.role === 'owner' ? 'Владелец' : 'Участник'}</p>
+          : <p>Компания ещё не выбрана.</p>}
+        {comparison === 'match' && <p className="svaib-account-note" role="status">Последний вход партнёра и кабинет: один аккаунт.</p>}
+        {comparison === 'mismatch' && <p className="svaib-account-error" role="alert">В кабинете и у партнёра разные аккаунты. Чтобы сверить их, войди в нужный аккаунт.</p>}
         {!production && companies.length > 0 && <label className="svaib-account-company">Компания<select value={companyId} disabled={busy || !verified} onChange={event => { const next = event.currentTarget.value; void act(async () => { await rpc.call('selectCompany', { company_id: next || null }); setVerified(false); setProgress(null); setCompanyId(next); }); }}>
           <option value="">Аккаунт без выбранной компании</option>
           {companies.map(company => <option key={company.company_id} value={company.company_id}>{company.company_name || company.tenant_name || (view.me?.tenant_id === company.company_id && view.me.tenant_name) || company.company_id}</option>)}
         </select></label>}
-        {hasCompanyMembership(view.me)
-          ? <p>{view.me.tenant_name || view.me.tenant_id} · {view.me.role === 'owner' ? 'Владелец' : 'Участник'}</p>
-          : <p>Компания ещё не выбрана.</p>}
-        {companies.length > 0 && <p className="svaib-account-note">Компания определяет отображаемый путь. Привязка рабочей папки проверяется отдельно.</p>}
-      </section>}
-      {view.profile && <section><h2>Мой интерфейс</h2>
-        <label className="svaib-account-toggle"><input type="checkbox" checked={view.profile.features.workspace_card} disabled={busy || !verified || !view.canEdit}
-          onChange={event => { const enabled = event.currentTarget.checked; const revision = view.profile!.revision;
-            const request = sequence.current;
-            void act(async () => {
-              const updated = await rpc.call('setWorkspaceCard', { enabled, expectedRevision: revision, ...(companyId ? { company_id: companyId } : {}) });
-              if (request === sequence.current) setView(updated);
-            }); }}/>
-          Показывать карточку рабочего пространства</label>
-        <p className="svaib-account-note">Настройка хранится в svaib. Редакция {view.profile.revision}. Изменение применяется без пересборки плагина.</p>
-      </section>}
-      {view.profile?.features.workspace_card && view.me && <section className="svaib-account-workspace"><h2>Моё пространство</h2>
-        {view.me.workspace?.repo ? <><p className="svaib-account-path">{view.me.workspace.repo}</p>
-          <p>Профиль: {view.me.workspace.profile_path || 'ещё не указан'}</p></> : <p>Пространство ещё не подключено.</p>}
-      </section>}
-    </>}
-      <footer><button className="svaib-account-button" disabled={busy} onClick={() => void act(refresh)}>Обновить</button>
+      </div>}
+      {view?.message && <p role="status" className="svaib-account-note">{view.message}</p>}
+      {view?.state === 'waiting' && connection?.stage !== 'cabinet' && <div className="svaib-account-login">
+        <p>Подтверди вход в уже открытом браузере или отмени незавершённый вход.</p>
+        <button className="svaib-account-button" disabled={busy} onClick={() => void act(async () => { await rpc.call('cancelLogin'); await refresh(); })}>Отменить вход</button>
+      </div>}
+      {error && <p role="alert" className="svaib-account-error">{error}</p>}
+    </section>
+    {view?.state === 'signed-out' ? <section className="svaib-journey"><h2>Начало работы</h2><p className="svaib-account-note">Войди в svaib, чтобы продолжить настройку и выбрать компанию.</p>
+      <button className="svaib-journey-action" disabled={busy} onClick={() => void act(async () => { await rpc.call('startCabinetLogin'); await refresh(); })}>Войти в svaib</button></section> :
+    view?.state === 'waiting' ? <section className="svaib-journey"><h2>Начало работы</h2><p role="status" className="svaib-account-note">После входа здесь появятся шаги для работы с партнёром.</p></section> :
+    !selectionLoaded || !progress ? <section className="svaib-journey"><h2>Начало работы</h2><p role="status" className="svaib-account-note">Проверяю этапы…</p></section> : progress.status === 'unavailable' ?
+      <section className="svaib-journey"><h2>Начало работы</h2>
+        <p role="status" className="svaib-account-note">Не удалось загрузить этапы. Можно продолжить работу с партнёром.</p>
+        <button type="button" className="svaib-journey-action" onClick={() => continueJourney()}>Продолжить</button>
+      </section> :
+      <OnboardingJourney setup={setup} setupComplete={setupComplete} busy={busy || !verified}
+        showNextSteps={personal?.snapshot?.accountId === view?.me?.account_id ? personal?.snapshot?.preferences.showNextSteps : true}
+        contextLabel={companyId ? `Компания: ${selectedCompanyName}` : undefined}
+        nextSteps={next?.stages.map(stage => ({ id: stage.id, title: stage.title, state: stage.state ?? 'next' })) ?? []}
+        stagesAvailable={next?.status === 'available'} onContinue={continueJourney} />}
+    {production && view?.me?.account_id ? <CompanyList key={view.me.account_id} accountId={view.me.account_id} companies={companies}
+      selectedCompanyId={companyId} verified={verified} onSelect={async id => {
+        await rpc.call('selectCompany', { company_id: id });
+        if (id !== companyId) { setVerified(false); setProgress(null); setCompanyId(id); }
+      }} onConnect={company => navigate.toCompose({ initialPrompt: `Помоги подключить компанию и подготовить её пространство svaib. Компания: ${company.name} (ID: ${company.companyId}). Сохрани готовые входы, материалы и уже пройденные этапы. Помоги выбрать постоянную рабочую папку и проверь её перед добавлением вкладки.`, focusPrompt: false })} />
+      : <section className="svaib-companies"><h2>Мои компании</h2><p className="svaib-account-note">{view?.state === 'signed-out' ? 'Твои компании появятся здесь после входа.' : 'Здесь появятся компании, к которым у тебя есть доступ.'}</p></section>}
+    <section className="svaib-account-settings" aria-labelledby="svaib-settings-title"><h2 id="svaib-settings-title">Настройки и интерфейс</h2>
+      {view?.state === 'connected' && view.me?.account_id ? <UserSettings accountId={view.me.account_id} verified={verified && !busy} workspaces={workspaces} />
+        : <p className="svaib-account-note">Личные настройки появятся после входа в svaib.</p>}
+      <footer><button className="svaib-account-button" disabled={busy} onClick={() => void act(async () => { await Promise.all([refresh(), personal?.refresh()]); })}>Обновить</button>
         {view && view.state !== 'signed-out' && view.state !== 'waiting' && <button className="svaib-account-button" disabled={busy} onClick={() => void act(async () => {
           forget(); const result = await rpc.call('logout'); await refresh();
           if (!result.revoked) setError('На этом BB подключение удалено. Серверный отзыв не подтверждён.');
         })}>Выйти из кабинета</button>}
       </footer>
+    </section>
   </main></div>;
 }
 
@@ -222,9 +225,9 @@ export default definePluginApp(app => {
   app.slots.navPanel({ id: 'account', title: 'Мой svaib · прототип', icon: 'UserRound', path: 'account', component: AccountRouter });
 });
 
-export function AccountRouter({ subPath, production = false }: PluginNavPanelProps & { production?: boolean }) {
+export function AccountRouter({ subPath, production = false, preparationPanels, workspaces }: PluginNavPanelProps & { production?: boolean; preparationPanels?: ReactNode; workspaces?: { id: string; name: string }[] }) {
   const match = /^(connect|verify)(?:\/(thr_[a-z0-9]+))?$/.exec(subPath);
-  if (!match) return <AccountPage production={production} />;
-  if (match[1] === 'verify' && !match[2]) return <AccountPage production={production} />;
+  if (!match) return <AccountPage production={production} preparationPanels={preparationPanels} workspaces={workspaces} />;
+  if (match[1] === 'verify' && !match[2]) return <AccountPage production={production} preparationPanels={preparationPanels} workspaces={workspaces} />;
   return <PartnerSetup key={subPath} production={production} phase={match[1] === 'verify' ? 'verify' : match[2] ? 'chat' : 'setup'} threadId={match[2]} />;
 }

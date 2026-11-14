@@ -23,8 +23,8 @@ export class NativeLogin {
   private record: Record | null = null;
   private starting: Promise<{ terminalId: string; message: string; finished: boolean }> | null = null;
   constructor(private sdk: PluginBbSdk, private kv: PluginKvStorage, private pluginId: string,
-    private python?: (hostId: string) => Promise<string | { executable: string; path?: string }>) {}
-  async load() { const parsed = recordSchema.safeParse(await this.kv.get(key)); if (parsed.success) this.record = parsed.data; }
+    private python?: (hostId: string) => Promise<string | { executable: string; path?: string }>, private storageKey = key) {}
+  async load() { const parsed = recordSchema.safeParse(await this.kv.get(this.storageKey)); if (parsed.success) this.record = parsed.data; }
   owns(owner: Owner) { return !!this.record && this.record.runId === owner.runId && this.record.threadId === owner.threadId &&
     JSON.stringify(this.record.binding) === JSON.stringify(owner.binding); }
   async terminalUnavailable() {
@@ -108,18 +108,18 @@ export class NativeLogin {
       start: { mode: 'argv', argv }, title: 'Вход svaib · Codex', cols: 80, rows: 24 });
     const record: Record = { ...owner, terminalId: terminal.id, startedAt: Date.now(), input };
     this.record = record;
-    try { await valid(); await this.terminal(owner); await valid(); await this.kv.set(key, record); await valid(); }
+    try { await valid(); await this.terminal(owner); await valid(); await this.kv.set(this.storageKey, record); await valid(); }
     catch (error) {
       await this.cancelCreated(terminal.id);
       // Keep the owned terminal discoverable until its graceful shutdown really
       // finishes, even if its flow became stale while create() was in flight.
       if (this.record === record) {
         record.retiring = true;
-        await this.kv.set(key, record).catch(() => {});
+        await this.kv.set(this.storageKey, record).catch(() => {});
       }
       throw error;
     }
-    return { terminalId: terminal.id, finished: false, message: 'Подтверди вход в браузере. Если вернёшься позже, продолжи разговор с партнёром — выполненные шаги сохранятся.' };
+    return { terminalId: terminal.id, finished: false, message: 'Подтверди вход в браузере. Завершение проверяется автоматически.' };
   }
   private async cancelCreated(terminalId: string) {
     // The owned helper closes its native app-server with EOF and waits for real
@@ -135,7 +135,7 @@ export class NativeLogin {
     catch (error) { if (error instanceof NativeTerminalMissing) return false; throw error; }
     if (!['running', 'starting'].includes(terminal.status)) return exited(terminal);
     record.retiring = true;
-    await this.kv.set(key, record);
+    await this.kv.set(this.storageKey, record);
     await this.sdk.terminals.input({ terminalId: terminal.id, dataBase64: Buffer.from('cancel\n').toString('base64') });
     // A cancel request is not proof of exit. Do not overwrite this record or
     // launch another native process while EOF/shutdown may still be pending.

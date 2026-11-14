@@ -18,12 +18,15 @@ import { registerScreenModule } from './screen-module';
 import { registerMetricsScreenModule } from './metrics-screen-module';
 import { createScreenPluginContext, type PersistentRootValidator } from './screen-native-context';
 import { companyWorkspaceRpc, createCompanyWorkspaces, isCompanyWorkspace, matchesCompanyProfileScope, type CompanyProfileScope } from './company-workspaces';
+import { userPreferencesRpc } from './user-preferences-contract';
+import { createUserPreferences } from './user-preferences';
 
 const actionInput = z.object({ workspaceId: idSchema, actionId: idSchema, aspectId: aspectIdSchema.optional(), itemId: idSchema.optional() }).strict();
 const actionMetadata = actionInput.extend({ schema: z.literal(1) }).strict();
 
 export const rpcContract = defineRpcContract({
   ...companyWorkspaceRpc,
+  ...userPreferencesRpc,
   overview: { input: z.null(), output: z.object({ workspaces: z.array(workspaceSchema), generatedAt: z.string(), accountId: z.string().nullable().optional() }).strict() },
   source: {
     input: z.object({ workspaceId: idSchema, sourceId: z.string().min(1).max(80) }).strict(),
@@ -160,7 +163,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   const skillScope = (workspace: CatalogWorkspace) => JSON.stringify([workspace.projectId, workspace.environmentId, workspace.hostId]);
   settings.onChange(next => { configPath = next.configPath; skillCatalogs.clear(); });
   const primaryHostId = (await bb.sdk.system.config()).primaryHostId;
-  await registerKimiSetup(bb, primaryHostId);
+  const kimi = await registerKimiSetup(bb, primaryHostId);
   function validateLocal(config: WorkplaceConfig) {
     validateInstructions(config);
     if (config.workspaces.some(w => w.hostId !== primaryHostId)) throw new Error('Этот эксперимент читает только пространства на машине BB-сервера. Удалённые hosts пока не поддерживаются.');
@@ -195,6 +198,8 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     read: async () => (await settings.get()).productionOAuthSession ?? '',
     write: async value => { await settings.experimental_set({ productionOAuthSession: value || null }); },
   } });
+  runtime.setAdmissionGuard(account.admitAuth);
+  const userPreferences = createUserPreferences({ kv: bb.storage.kv, account, kimiHidden: async () => (await kimi.status()).hidden });
   let claimedLegacy = new Set<string>();
   let claimedScopes: CompanyProfileScope[] = [];
   const companies = createCompanyWorkspaces({ sdk: bb.sdk, kv: bb.storage.kv, account, legacy: legacyConfig,
@@ -289,6 +294,12 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     };
   });
   bb.rpc.register(rpcContract, {
+    userPreferences: () => userPreferences.get(),
+    updateUserPreferences: async input => {
+      const result = await userPreferences.update(input);
+      bb.realtime.publish('user-preferences-changed', { accountId: result.accountId });
+      return result;
+    },
     companyDirectory: () => companies.directory(),
     companyTargets: ({ companyId }) => companies.targets(companyId),
     bindCompanyWorkspace: async ({ companyId, environmentId }) => {

@@ -3,6 +3,7 @@ import { useRpc, useRealtime, type PluginRpcClient } from '@get-bb/plugin-sdk/ap
 import type { screenRpcContract } from './screen-module';
 import { createScreenTransport, ScreenTransportError, type ScreenBackendPort } from './screen-transport';
 import { ScreenSurface, clearScreenSnapshots } from 'bb-plugin-svaib-screen-pilot/renderer';
+import { useMetricPreferences } from './use-metric-preferences';
 
 type Rpc = PluginRpcClient<typeof screenRpcContract>;
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } };
@@ -71,8 +72,10 @@ export function ScreenPanel({ threadId }: { threadId: string }) {
     }),
   }), [rpc, threadId, screenId]);
   useEffect(() => () => transport.dispose(), [transport]);
+  const metricPreferences = useMetricPreferences(screenId ? 'screen:' + screenId : '');
   if (loading || (screenId && verifiedThread !== threadId)) return <section className="sv-screen"><p role="status">Проверяю Screen этого разговора…</p></section>;
   if (!screenId) return <section className="sv-screen"><p role={error ? 'alert' : 'status'}>{error || 'Попроси партнёра открыть Screen в этом разговоре. Он проверит подключение и выбранную компанию.'}</p>
     <button onClick={() => setReload(value => value + 1)}>Повторить проверку</button></section>;
-  return <ScreenSurface key={`${threadId}:${screenId}`} cacheKey={`${threadId}:${screenId}`} transport={transport} />;
+  return <>{metricPreferences.error && <p role="status" className="svb-preferences-note">Настройки вида показателей: {metricPreferences.error}</p>}
+    <ScreenSurface key={`${threadId}:${screenId}`} cacheKey={`${threadId}:${screenId}`} transport={transport} metricsPreferences={metricPreferences.preferences} /></>;
 }

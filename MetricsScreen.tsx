@@ -3,6 +3,7 @@ import { useRpc, useRealtime, useSdk, useBbNavigate, experimental_NewThreadCompo
 import { ScreenSurface, clearScreenSnapshots, type ScreenDiscussion } from 'bb-plugin-svaib-screen-pilot/renderer';
 import { createScreenTransport, ScreenTransportError, type ScreenBackendPort } from './screen-transport';
 import type { metricsScreenRpcContract } from './metrics-screen-module';
+import { useMetricPreferences } from './use-metric-preferences';
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } };
 function unwrap<T>(reply: Reply<T>): T {
@@ -33,6 +34,7 @@ export function MetricsScreen({ workspaceId, accountId }: { workspaceId: string;
     return () => { ++generation.current; clearScreenSnapshots(`metrics:${accountId}:${workspaceId}:`); };
   }, [rpc, selector, reload]);
   const screenId = binding?.screenId;
+  const metricPreferences = useMetricPreferences(screenId ? 'screen:' + screenId : '', accountId);
   const transport = useMemo(() => {
     const chosen = { ...selector, screenId: screenId ?? 'missing' };
     async function call<T>(pending: Promise<Reply<T>>, signal?: AbortSignal, cancel?: () => void) {
@@ -65,6 +67,7 @@ export function MetricsScreen({ workspaceId, accountId }: { workspaceId: string;
     } catch (cause) { if (current === generation.current) setError(cause instanceof Error ? cause.message : 'Не удалось подготовить разговор.'); }
   }
   return <section className="svb-metrics-screen" aria-label="Показатели компании">
+    {metricPreferences.error && <p role="status" className="svb-preferences-note">Настройки вида показателей: {metricPreferences.error}</p>}
     {error && <p role="alert">{error}</p>}
     {preview ? <div className="svb-metrics-composer"><button type="button" onClick={() => { setPreview(null); setDiscussion(null); }}>К графикам</button><h3>{preview.title}</h3>
       <NewThreadComposer key={`${accountId}:${workspaceId}:${discussion?.metricId ?? 'prepare'}`} defaultProjectId={preview.projectId} defaultEnvironment={{ type: 'reuse', environmentId: preview.environmentId }} initialPrompt={preview.prompt}
@@ -78,7 +81,7 @@ export function MetricsScreen({ workspaceId, accountId }: { workspaceId: string;
           if (generation.current === current) navigate.toThread(thread.id);
         }} />
     </div> : <>
-      {binding === null ? <p role="status">{blocked ? 'Подключение изменилось.' : error ? 'Показатели недоступны.' : 'Проверяю показатели…'}</p> : screenId ? <ScreenSurface key={`${accountId}:${workspaceId}:${screenId}`} embedded cacheKey={`metrics:${accountId}:${workspaceId}:${screenId}`} transport={transport} onDiscuss={context => void start(context)} /> : <p>Показатели ещё не подготовлены. Партнёр прочитает источники и соберёт графики для этой страницы.</p>}
+      {binding === null ? <p role="status">{blocked ? 'Подключение изменилось.' : error ? 'Показатели недоступны.' : 'Проверяю показатели…'}</p> : screenId ? <ScreenSurface key={`${accountId}:${workspaceId}:${screenId}`} embedded cacheKey={`metrics:${accountId}:${workspaceId}:${screenId}`} transport={transport} metricsPreferences={metricPreferences.preferences} onDiscuss={context => void start(context)} /> : <p>Показатели ещё не подготовлены. Партнёр прочитает источники и соберёт графики для этой страницы.</p>}
       {!blocked && <div className="svb-metrics-screen-actions"><button type="button" onClick={() => void start(null)}>{screenId ? 'Обновить из источников' : 'Подготовить показатели'}</button><button type="button" onClick={() => setEditing(value => !value)}>Выбрать Screen</button></div>}
       {editing && <form onSubmit={async event => {
         event.preventDefault(); const current = generation.current; setError('');

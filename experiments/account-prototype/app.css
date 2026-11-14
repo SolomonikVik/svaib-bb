@@ -1,36 +1,67 @@
-.svaib-account-viewport { width: 100%; height: 100%; min-width: 0; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
-.svaib-account { box-sizing: border-box; width: 100%; max-width: 840px; margin: 0 auto; padding: 40px 28px; color: var(--foreground); font-family: Inter, sans-serif; line-height: 1.6; }
-.svaib-account header { display: flex; align-items: center; gap: 20px; margin-bottom: 24px; }
-.svaib-account-mark { font-size: 58px; font-weight: 800; color: #00b4a6; letter-spacing: -7px; }
-.svaib-account h1 { font-size: 30px; line-height: 1.2; margin: 2px 0; }
-.svaib-account h2 { font-size: 19px; margin: 0 0 12px; }
-.svaib-account p { margin: 8px 0; }
-.svaib-account section { padding: 24px; margin: 18px 0; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: 14px; }
-.svaib-account-eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
-.svaib-account-note { font-size: 13px; opacity: .7; }
-.svaib-account-button, .svaib-account-link { display: inline-block; padding: 9px 16px; border-radius: 9px; border: 1px solid color-mix(in srgb, currentColor 25%, transparent); background: transparent; color: inherit; cursor: pointer; font: inherit; margin: 4px 8px 4px 0; }
-.svaib-account-link { background: #00b4a6; color: #071e24; font-weight: 650; text-decoration: none; }
-.svaib-account-button:disabled { opacity: .45; cursor: wait; }
-.svaib-account-error { border-left: 3px solid #ff4d8d; padding: 12px; }
-.svaib-account-toggle { display: flex; gap: 12px; align-items: center; }
-.svaib-account-toggle input { width: 18px; height: 18px; accent-color: #00b4a6; }
-.svaib-account-workspace { border-color: #00b4a6 !important; }
-.svaib-account-path { overflow-wrap: anywhere; }
-.svaib-account-company { display: grid; gap: 8px; margin: 14px 0; }
-.svaib-account-company select { max-width: 100%; padding: 8px; font: inherit; color: inherit; background: var(--background); border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 8px; }
-.svaib-company-list { margin: 18px 0 14px; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
-.svaib-company-row { display: grid; grid-template-columns: minmax(0, 1fr) 125px 140px; gap: 16px; align-items: center; padding: 19px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+.svaib-account-viewport { width: 100%; min-width: 0; min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; background: var(--background, #fafbfc); }
+.svaib-account { box-sizing: border-box; width: 100%; max-width: 920px; margin: 0 auto; padding: 40px 40px 56px; }
+.svaib-account h1, .svaib-account h2, .svaib-account h3 { color: var(--svaib-ink); text-wrap: balance; }
+.svaib-account h1 { margin: 0; font-family: Montserrat, Inter, sans-serif; font-size: clamp(24px, 3vw, 32px); font-weight: 600; letter-spacing: -.035em; line-height: 1.25; overflow-wrap: anywhere; }
+.svaib-account h2 { margin: 0 0 12px; font-family: Montserrat, Inter, sans-serif; font-size: 20px; line-height: 1.4; font-weight: 600; letter-spacing: -.025em; }
+.svaib-account h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; }
+.svaib-account p { margin: 8px 0 0; }
+.svaib-account > section { min-width: 0; padding: 32px 0; margin: 0; border: 0; border-top: 1px solid var(--svaib-line); border-radius: 0; }
+.svaib-account > .svaib-account-identity { border: 0; padding: 0 0 32px; }
+.svaib-account-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 24px; }
+.svaib-account .svaib-account-eyebrow { margin: 0; color: var(--svaib-muted); font-size: 10px; text-transform: uppercase; font-weight: 550; letter-spacing: .12em; }
+.svaib-account-person { display: flex; gap: 20px; align-items: center; min-width: 0; }
+.svaib-account-person > div { min-width: 0; }
+.svaib-account-avatar { display: grid; place-items: center; width: 64px; height: 64px; flex: 0 0 64px; border-radius: 20px; background: var(--svaib-soft); color: var(--svaib-accent); font-family: Montserrat, Inter, sans-serif; font-size: 23px; font-weight: 550; }
+.svaib-account-identity-detail { margin-top: 20px; }
+.svaib-account .svaib-account-note { color: var(--svaib-muted); font-size: 13px; font-weight: 400; line-height: 1.6; }
+.svaib-account .svaib-account-error { margin-top: 16px; border-left: 2px solid var(--destructive, var(--svaib-ink)); padding: 4px 0 4px 14px; font-size: 13px; }
+.svaib-account-login { margin-top: 20px; }
+.svaib-account-login button { margin-top: 12px; }
+.svaib-account-preparation { display: grid; gap: 16px; margin-bottom: 32px; }
+.svaib-account-preparation:empty { display: none; }
+.svaib-account-toggle { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; }
+.svaib-account-toggle input, .svaib-company-toggle input { width: 18px; height: 18px; flex: 0 0 18px; margin: 2px 0 0; accent-color: var(--svaib-action); }
+.svaib-account-setting { margin-top: 20px; }
+.svaib-account-setting > p { padding-left: 30px; }
+.svaib-account-workspace { margin-top: 24px; }
+.svaib-account-path, .svaib-company-path { overflow-wrap: anywhere; }
+.svaib-account-company { display: grid; gap: 8px; max-width: 100%; margin: 16px 0; font-size: 13px; }
+.svaib-company-list { margin: 8px 0 16px; }
+.svaib-company-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px auto; gap: 20px; align-items: center; padding: 24px 0; border-bottom: 1px solid var(--svaib-line); }
+.svaib-company-row:last-child { border-bottom: 0; }
+.svaib-company-row > * { min-width: 0; }
 .svaib-company-name { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.svaib-company-select { padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
-.svaib-company-select[aria-pressed="true"] { color: #008b7f; }
-.svaib-company-badge { border-radius: 5px; padding: 3px 6px; font-size: 10px; color: #008b7f; background: color-mix(in srgb, #008b7f 9%, transparent); }
-.svaib-company-toggle { display: flex; gap: 8px; align-items: center; font-size: 12px; }
-.svaib-company-toggle input { width: 18px; height: 18px; accent-color: #008b7f; }
-.svaib-company-open { color: #008b7f; }
-.svaib-company-path { overflow-wrap: anywhere; }
-.svaib-company-path-change { padding: 0; border: 0; background: none; color: #008b7f; font: inherit; font-size: 11px; cursor: pointer; }
-.svaib-company-connection { margin-top: 18px; border-radius: 10px; padding: 18px; background: color-mix(in srgb, #008b7f 7%, transparent); }
-@media (max-width: 650px) { .svaib-company-row { grid-template-columns: 1fr 140px; gap: 10px; } .svaib-company-row > div:first-child { grid-column: 1 / -1; } }
-.svaib-account footer { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0; }
-.svaib-account .svaib-account-primary { background: #00b4a6; color: #071e24; font-weight: 650; }
-@media (max-width: 600px) { .svaib-account { padding: 24px 16px; } .svaib-account h1 { font-size: 24px; } }
+.svaib-account .svaib-company-select { max-width: 100%; padding: 2px 0; border: 0; background: none; color: inherit; font: inherit; font-size: 15px; font-weight: 600; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.svaib-company-select[aria-pressed="true"] { color: var(--svaib-accent); }
+.svaib-company-badge { padding: 3px 7px; border-radius: 5px; background: var(--svaib-soft); color: var(--svaib-accent); font-size: 10px; }
+.svaib-company-toggle { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; }
+.svaib-account .svaib-company-open { color: var(--svaib-accent); white-space: nowrap; }
+.svaib-company-path-change { min-height: 32px; padding: 6px 0; border: 0; background: none; color: var(--svaib-accent); font: inherit; font-size: 12px; cursor: pointer; }
+.svaib-company-path-change:hover { text-decoration: underline; text-underline-offset: 4px; }
+.svaib-company-connection { margin-top: 20px; padding: 20px; border-radius: 12px; background: var(--svaib-soft); }
+.svaib-company-connection button { margin: 4px 8px 4px 0; }
+.svaib-account .svaib-account-technical-note { margin-top: 24px; }
+.svaib-account footer { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.svaib-user-settings { margin-top: 20px; }
+.svaib-user-settings fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.svaib-user-settings .svaib-account-company { max-width: 420px; margin-top: 0; }
+.svaib-user-setting-group { margin-top: 28px; }
+.svaib-user-setting-group > h3 { margin-bottom: 12px; }
+.svaib-user-setting-group > .svaib-account-toggle + .svaib-account-toggle { margin-top: 14px; }
+.svaib-account .svaib-toggle-note { padding-left: 30px; }
+.svaib-tab-order { margin: 12px 0 0; padding: 0; list-style: none; }
+.svaib-tab-order li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--svaib-line); }
+.svaib-tab-order li:last-child { border: 0; }
+.svaib-tab-order li > span { min-width: 0; overflow-wrap: anywhere; }
+.svaib-tab-order li > div { display: flex; gap: 8px; flex-shrink: 0; }
+.svaib-account .svaib-tab-order button { width: 40px; padding: 8px; font-size: 17px; }
+@media (max-width: 650px) {
+  .svaib-account { padding: 28px 20px 40px; }
+  .svaib-account > section { padding: 28px 0; }
+  .svaib-account h2 { font-size: 19px; }
+  .svaib-account-avatar { width: 56px; height: 56px; flex-basis: 56px; border-radius: 18px; font-size: 20px; }
+  .svaib-account-person { gap: 16px; }
+  .svaib-company-row { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; }
+  .svaib-company-row > div:first-child { grid-column: 1 / -1; }
+  .svaib-company-row > .svaib-account-button { max-width: 190px; }
+}

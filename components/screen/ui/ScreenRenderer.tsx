@@ -7,7 +7,7 @@ import { SVGRenderer } from 'echarts/renderers';
 import type { Block, Screen } from '../src/model';
 import { ScaffoldEditor, clearScaffoldDrafts, screenErrorMessage } from './ScaffoldEditor';
 import './screen.css';
-import MetricsDashboardPanel, { type MetricDiscussion } from './MetricsDashboard';
+import MetricsDashboardPanel, { type MetricDiscussion, type MetricPreferences } from './MetricsDashboard';
 
 export type ScreenDiscussion = MetricDiscussion & { screenId: string; revision: number; blockId: string };
 
@@ -67,13 +67,13 @@ function rememberSnapshot(key: string | undefined, screen: Screen) {
   while (snapshots.size > SNAPSHOT_LIMIT) snapshots.delete(snapshots.keys().next().value!);
 }
 
-type SurfaceProps = { transport: ScreenTransport; invalidate?: number; cacheKey?: string; embedded?: boolean; onDiscuss?: (context: ScreenDiscussion) => void };
+type SurfaceProps = { transport: ScreenTransport; invalidate?: number; cacheKey?: string; embedded?: boolean; onDiscuss?: (context: ScreenDiscussion) => void; metricsPreferences?: MetricPreferences };
 export function ScreenSurface(props: SurfaceProps) {
   if (props.embedded) return <div className="screen-embedded"><ScreenContent {...props} /></div>;
   return <div className="screen-bb-page"><div className="screen-frame"><ScreenContent {...props} /></div></div>;
 }
 
-function ScreenContent({ transport, invalidate = 0, cacheKey, embedded = false, onDiscuss }: SurfaceProps) {
+function ScreenContent({ transport, invalidate = 0, cacheKey, embedded = false, onDiscuss, metricsPreferences }: SurfaceProps) {
   const cached = cacheKey ? snapshots.get(cacheKey) : undefined;
   const [screen, setScreen] = useState<Screen | null>(cached ?? null);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(cached?.submission?.selectedIds ?? []));
@@ -163,7 +163,10 @@ function ScreenContent({ transport, invalidate = 0, cacheKey, embedded = false, 
     {error && <p role="alert" className="screen-error">{error}</p>}
     <div className={`screen-blocks screen-${screen.document.layout}`}>
       {screen.document.blocks.map(block => <section key={block.id} className={`screen-card screen-block-${block.type}`} data-block-id={block.id}>{!(embedded && block.type === 'metrics') && <h2>{block.title}</h2>}
-        {block.type === 'metrics' ? <MetricsDashboardPanel data={block.data} embedded onDiscuss={online && onDiscuss ? context => onDiscuss({ ...context, screenId: screen.id, revision: screen.revision, blockId: block.id }) : undefined} /> : block.type === 'note' ? <p className="screen-note-text">{block.text}</p> : block.type === 'chart' ? <Chart block={block} /> : block.type === 'scaffold' ?
+        {block.type === 'metrics' ? <MetricsDashboardPanel data={block.data} embedded preferences={metricsPreferences ? {
+          ready: metricsPreferences.ready,
+          read: id => metricsPreferences.read(JSON.stringify([block.id, id])), write: (id, changes) => metricsPreferences.write(JSON.stringify([block.id, id]), changes),
+        } : undefined} onDiscuss={online && onDiscuss ? context => onDiscuss({ ...context, screenId: screen.id, revision: screen.revision, blockId: block.id }) : undefined} /> : block.type === 'note' ? <p className="screen-note-text">{block.text}</p> : block.type === 'chart' ? <Chart block={block} /> : block.type === 'scaffold' ?
           <ScaffoldEditor block={block} screen={screen} transport={editorTransport} receive={receive} cacheKey={cacheKey && `${cacheKey}:${block.id}`} /> :
           <ul className="screen-tasks">{block.items.filter(task => filter === 'all' || task.owner === filter).map(task => <li key={task.id}>
             <label><input type="checkbox" aria-label={`Выбрать: ${task.title}`} disabled={screen.canEdit !== true} checked={selected.has(task.id)} onChange={() => { if (screen.canEdit === true) setSelected(previous => { const next = new Set(previous); next.has(task.id) ? next.delete(task.id) : next.add(task.id); return next; }); }} />
