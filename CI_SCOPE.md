@@ -10,6 +10,8 @@ official BB 0.48.1 and 0.49.0. It checks:
 - Native and managed Pi setup regressions, profile ownership, command handling,
   registration replacement, and real npm dependency resolution.
 - The actual managed Pi 1.5.2 and portable Node, including an empty PATH.
+- The shipped Harness with real pi-subagents from npm, a copied and reusable
+  runtime, and successful initialization through Pi's actual extension loader.
 - A real isolated BB server and daemon, initially absent Pi, the official Pi
   installer, protected synthetic-key setup, and automatic wizard completion.
 - Real BB/Pi context over consecutive requests, plugin reload, and recreation of

@@ -211,6 +211,10 @@ def main():
         diagnostics = {}
         try:
             diagnostics['providerCliStatus'] = cli('machine', 'provider-cli', 'status', machine['id'], '--json')
+            diagnostics['nativeRuntimeRechecks'] = []
+            for _ in range(3):
+                diagnostics['nativeRuntimeRechecks'].append(rpc('kimiPiRuntime'))
+                time.sleep(2)
             diagnostics['pluginLog'] = subprocess.run([str(node), str(bb_script), 'plugin', 'logs', 'svaib-workplace', '--lines', '60'],
                 env=env, cwd=workspace, capture_output=True, text=True, encoding='utf-8', timeout=20).stdout[-16000:]
             if not diagnostics['providerCliStatus'].get('pi', {}).get('installed'):
@@ -223,6 +227,21 @@ def main():
                 probe = subprocess.run([str(node), str(direct), '--version'], env=env, cwd=workspace,
                     capture_output=True, text=True, encoding='utf-8', timeout=30)
                 diagnostics['directNodeProbe'] = {'exitCode': probe.returncode, 'stdout': probe.stdout[-2000:], 'stderr': probe.stderr[-4000:]}
+            if os.name == 'nt':
+                diagnostics['windowsDiscovery'] = {
+                    'PATHEXT': env.get('PATHEXT'), 'PATH': env['PATH'],
+                    'launchers': {name: (prefix / name).is_file() for name in ('pi', 'pi.cmd', 'pi.ps1')},
+                }
+                commands = {'wherePi': [str(system / 'where.exe'), 'pi']}
+                if (prefix / 'pi.cmd').is_file():
+                    commands['absoluteCmdProbe'] = [env.get('COMSPEC', str(system / 'cmd.exe')),
+                        '/d', '/s', '/c', f'""{prefix / "pi.cmd"}" --version"']
+                    diagnostics['windowsDiscovery']['cmdLauncher'] = (prefix / 'pi.cmd').read_text(encoding='utf-8')[:4000]
+                for name, command in commands.items():
+                    probe = subprocess.run(command, env=env, cwd=workspace, capture_output=True,
+                        text=True, encoding='utf-8', errors='replace', timeout=30)
+                    diagnostics['windowsDiscovery'][name] = {'exitCode': probe.returncode,
+                        'stdout': probe.stdout[-4000:], 'stderr': probe.stderr[-4000:]}
         except Exception as diagnostic_error:
             diagnostics['collectionError'] = str(diagnostic_error)[-2000:]
         (artifact / 'diagnostics.json').write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding='utf-8')

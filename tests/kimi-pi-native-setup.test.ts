@@ -6,7 +6,7 @@ import type { KimiView } from '../kimi-contract';
 
 const hostId = 'host_native';
 const registration = { command: '/native/pi', args: [], agentDir: '/user/.pi/agent' };
-async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; completionPendingOnce?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
+async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; postInstallMisses?: number; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; completionPendingOnce?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
   let installed = !options.absent, credential = !!options.credential, owned = false, output = '';
   let installs = 0, spawns = 0, eventSeq = 1, becameActive = false;
   const env = [
@@ -55,7 +55,10 @@ async function fixture(options: { absent?: boolean; credential?: boolean; enviro
   }, experimental_callHostRpc: async ({ method, input }) => {
     if (method === 'runtimePrepare') return { platform: 'linux', status: 'ready', step: 'complete', message: '' };
     if (method === 'kimiPiNativePrerequisites') { assert.equal(installs, 0); return null; }
-    if (method === 'kimiPiNativeInspect') return { installed, registration: installed ? registration : null, profile: credential ? 'ready' : 'absent', hasCredential: credential, canReplaceKey: owned };
+    if (method === 'kimiPiNativeInspect') {
+      const ready = installed && !(installs && options.postInstallMisses && options.postInstallMisses-- > 0);
+      return { installed: !!ready, registration: ready ? registration : null, profile: credential ? 'ready' : 'absent', hasCredential: credential, canReplaceKey: owned };
+    }
     if (method === 'kimiPiNativePrepare') {
       const key = (input as { apiKey?: string }).apiKey;
       if (key) { credential = true; owned = true; }
@@ -106,6 +109,14 @@ test('the Pi verification chat uses the permission mode supported by native Pi',
   await f.call('kimiStart', {}); await f.controller.settled();
   const [request] = f.harness.inspection.sdk.callsTo('threads.spawn')[0] as [{ permissionMode: string }];
   assert.equal(request.permissionMode, 'full');
+});
+
+test('native Pi waits for executable discovery after installation without running another installer', async t => {
+  const f = await fixture({ absent: true, postInstallMisses: 1 }); t.after(() => f.harness.lifecycle.dispose());
+  await f.call('kimiSelectHarness', { harness: 'pi' });
+  await f.call('kimiStart', {}); await f.controller.settled();
+  assert.equal((await f.call('kimiStatus')).stage, 'key');
+  assert.equal(f.installs(), 1); assert.equal(f.spawns(), 0);
 });
 
 test('native Pi keeps waiting after a cold catalogue lookup times out once', async t => {
