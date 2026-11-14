@@ -6,7 +6,7 @@ import type { KimiView } from '../kimi-contract';
 
 const hostId = 'host_native';
 const registration = { command: '/native/pi', args: [], agentDir: '/user/.pi/agent' };
-async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; postInstallMisses?: number; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; completionPendingOnce?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
+async function fixture(options: { absent?: boolean; credential?: boolean; environmentKey?: boolean; interrupt?: boolean; installFails?: boolean; postInstallMisses?: number; onPostInstallInspect?: () => void; foreignEnv?: boolean; wrongModel?: boolean; missingModel?: boolean; fallback?: boolean; initialEvent?: boolean; requestedEvent?: boolean; unaccepted?: boolean; otherTurn?: boolean; completionPendingOnce?: boolean; raceOnOutput?: boolean; activeOnEvent?: boolean; catalogTimeoutOnce?: boolean } = {}) {
   let installed = !options.absent, credential = !!options.credential, owned = false, output = '';
   let installs = 0, spawns = 0, eventSeq = 1, becameActive = false;
   const env = [
@@ -56,6 +56,7 @@ async function fixture(options: { absent?: boolean; credential?: boolean; enviro
     if (method === 'runtimePrepare') return { platform: 'linux', status: 'ready', step: 'complete', message: '' };
     if (method === 'kimiPiNativePrerequisites') { assert.equal(installs, 0); return null; }
     if (method === 'kimiPiNativeInspect') {
+      if (installs) options.onPostInstallInspect?.();
       const ready = installed && !(installs && options.postInstallMisses && options.postInstallMisses-- > 0);
       return { installed: !!ready, registration: ready ? registration : null, profile: credential ? 'ready' : 'absent', hasCredential: credential, canReplaceKey: owned };
     }
@@ -119,6 +120,16 @@ test('native Pi waits for executable discovery after installation without runnin
   assert.equal(f.installs(), 1); assert.equal(f.spawns(), 0);
 });
 
+test('native Pi readiness survives a host refresh taking more than thirty seconds', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await fixture({ absent: true, postInstallMisses: 4, onPostInstallInspect: () => { now += 10_000; } });
+  t.after(() => f.harness.lifecycle.dispose());
+  await f.call('kimiSelectHarness', { harness: 'pi' });
+  await f.call('kimiStart', {}); await f.controller.settled();
+  assert.equal((await f.call('kimiStatus')).stage, 'key');
+  assert.equal(f.installs(), 1); assert.equal(f.spawns(), 0);
+});
+
 test('native Pi keeps waiting after a cold catalogue lookup times out once', async t => {
   const f = await fixture({ catalogTimeoutOnce: true }); t.after(() => f.harness.lifecycle.dispose());
   await f.call('kimiSelectHarness', { harness: 'pi' });
@@ -151,7 +162,8 @@ test('interruption after native key commit resumes without asking for a second k
 });
 
 test('isolated installation is an explicit fallback and retains its own multi-host guard', async t => {
-  const f = await fixture({ absent: true, installFails: true }); t.after(() => f.harness.lifecycle.dispose());
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await fixture({ absent: true, installFails: true, onPostInstallInspect: () => { now += 30_000; } }); t.after(() => f.harness.lifecycle.dispose());
   await f.call('kimiSelectHarness', { harness: 'pi' });
   await f.call('kimiStart', {}); await f.controller.settled();
   assert.equal((await f.call('kimiStatus')).piMode, 'native');

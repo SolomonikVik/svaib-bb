@@ -234,8 +234,10 @@ def main():
                 }
                 commands = {'wherePi': [str(system / 'where.exe'), 'pi']}
                 if (prefix / 'pi.cmd').is_file():
-                    commands['absoluteCmdProbe'] = [env.get('COMSPEC', str(system / 'cmd.exe')),
-                        '/d', '/s', '/c', f'""{prefix / "pi.cmd"}" --version"']
+                    cmd = env.get('COMSPEC', str(system / 'cmd.exe'))
+                    # cmd.exe requires its own quote rules, not list2cmdline's
+                    # backslash escapes inside the /c payload.
+                    commands['absoluteCmdProbe'] = subprocess.list2cmdline([cmd]) + f' /d /s /c ""{prefix / "pi.cmd"}" --version"'
                     diagnostics['windowsDiscovery']['cmdLauncher'] = (prefix / 'pi.cmd').read_text(encoding='utf-8')[:4000]
                 for name, command in commands.items():
                     probe = subprocess.run(command, env=env, cwd=workspace, capture_output=True,

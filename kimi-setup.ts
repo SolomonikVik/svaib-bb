@@ -161,7 +161,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
           // Installation can finish before the refreshed host PATH exposes Pi.
           // Recheck the executable for a bounded period; never start a second
           // installer or treat the npm package alone as a working CLI.
-          const readyDeadline = Date.now() + 30_000;
+          const readyDeadline = Date.now() + 75_000;
           current = await client.call('kimiPiNativeInspect', null, target());
           while (!disposed && !current.installed && current.profile !== 'blocked' && Date.now() < readyDeadline) {
             await new Promise(resolve => setTimeout(resolve, 1000));
