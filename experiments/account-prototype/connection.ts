@@ -67,7 +67,7 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
       (!metadata.data.continuation || (metadata.data.continuation.sourceProjectId === prior.projectId &&
         (!metadata.data.continuation.sourceEnvironmentId || metadata.data.continuation.sourceEnvironmentId === prior.environmentId)))) return {
     tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL],
-    instructions: 'BB переключил этот разговор в другую папку. Перед продолжением вызови svaib_connect_start с уже известным поручением: backend проверит фактическую среду и границу компании и обновит привязку здесь. Не повторяй OAuth, не открывай новый разговор и не вызывай Screen до этой проверки. ' +
+    instructions: 'BB переключил этот разговор в другую папку. Перед продолжением вызови svaib_connect_start с уже известным поручением: backend проверит фактическую среду и границу компании и обновит привязку здесь. Не повторяй OAuth, не открывай новый разговор и не вызывай View до этой проверки. ' +
       continuationInstruction(metadata.data.continuation, metadata.data.previousThreadId),
   };
   if (metadata.data.phase === 'work') return { tools: connectionTools(context.provider.id), skills: [CONNECTION_SKILL], instructions:
@@ -94,7 +94,7 @@ export function connectionConfiguration(context: PluginAgentConfigurationContext
       `Для проверки используй настоящий MCP svaib whoami этого разговора; уже полученный свежий успешный ответ повторно не запрашивай. Если он работает, сохрани вход и продолжай исходное поручение здесь. ` +
       `При несовпадении аккаунтов сообщи пользователю, но не останавливай работу. Сохрани уже работающий вход MCP. ` +
       (metadata.data.verifyExistingOnly ? 'Проверяй только существующие входы; новый OAuth не запускай. ' : '') +
-      `Если MCP недоступен, следуй справке скилла; кабинет и MCP настраиваются отдельно. Компания, Screen и запись файлов проверяются отдельно. ${ACTIVE_ONBOARDING_GUIDANCE} ${workspaceNote}`
+      `Если MCP недоступен, следуй справке скилла; кабинет и MCP настраиваются отдельно. Компания, View и запись файлов проверяются отдельно. ${ACTIVE_ONBOARDING_GUIDANCE} ${workspaceNote}`
   };
   return unsupported;
 }

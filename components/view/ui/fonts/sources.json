@@ -1,0 +1,32 @@
+{
+  "source": "_inbox/2026-11-14_screen-perf-review/view-ui-proposal.html",
+  "provenance": "_inbox/2026-11-14_screen-perf-review/ui-evidence/brand-style-source.json",
+  "note": "Exact approved font bytes embedded as data URLs so browser and BB builders need no font file loaders.",
+  "assets": [
+    {
+      "asset": "montserrat-cyrillic.woff2",
+      "bytes": 21492,
+      "sha256": "0b00fbd6edcc84cd5f77364bbeb06b75ed263c740061eba34511f1e2ac1a82d3"
+    },
+    {
+      "asset": "montserrat-latin.woff2",
+      "bytes": 35508,
+      "sha256": "6438d7b8ea9c7c3992d5e2fd2afdb1ff948570a3ef0bedae76247b51632960ba"
+    },
+    {
+      "asset": "inter-400.ttf",
+      "bytes": 324820,
+      "sha256": "1b08e7fc267a5c7e1d614100f604b83e7e8a0be241f0f288faa2b3ac93a683ba"
+    },
+    {
+      "asset": "inter-500.ttf",
+      "bytes": 325304,
+      "sha256": "8c883f63b2c4157d997319f2c8bc6995ed4357ef371940d31ca159004a4aae63"
+    },
+    {
+      "asset": "inter-600.ttf",
+      "bytes": 326048,
+      "sha256": "e7a1aaf7eda9f2fad4131725fa556265ec75ca7b2d756260173a040363e8d4f7"
+    }
+  ]
+}

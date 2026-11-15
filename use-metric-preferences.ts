@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { MetricPreferences } from 'bb-plugin-svaib-screen-pilot/metrics';
+import type { MetricPreferences } from 'bb-plugin-svaib-view-pilot/metrics';
 import { useUserPreferences } from './UserPreferences';
 
 export function useMetricPreferences(scope: string, expectedAccountId?: string | null) {
@@ -10,9 +10,10 @@ export function useMetricPreferences(scope: string, expectedAccountId?: string |
   const update = personal?.update, verified = personal?.verified;
   const preferences = useMemo<MetricPreferences | undefined>(() => {
     if (!personal || !scope || (verified && !owner)) return undefined;
-    if (!owner || !own || !verified || !values || !update) return { ready: false, read: () => undefined, write: () => {} };
+    const identity = JSON.stringify([owner ?? null, scope]);
+    if (!owner || !own || !verified || !values || !update) return { identity, ready: false, read: () => undefined, write: () => {} };
     const key = (id: string) => JSON.stringify([scope, id]);
-    return { read: id => values[key(id)], write: (id, changes) => {
+    return { identity, read: id => values[key(id)], write: (id, changes) => {
       return update({ metricView: { key: key(id), ...changes } }, owner).catch(() => {});
     } };
   }, [scope, owner, own, verified, values, update, !!personal]);

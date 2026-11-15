@@ -1,4 +1,4 @@
-// Linux filesystem adapter. The caller supplies the verified root; Screen JSON never chooses it.
+// Linux filesystem adapter. The caller supplies the verified root; View JSON never chooses it.
 import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, opendir, realpath, type FileHandle } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -9,8 +9,8 @@ import {
   type SnapshotKind, type ScaffoldSnapshot, type SnapshotEntry, type ScaffoldImportLimits,
   type ScaffoldOverviewOptions,
   type ScaffoldRoleEvidence,
-} from 'bb-plugin-svaib-screen-pilot/scaffold-import';
-export * from 'bb-plugin-svaib-screen-pilot/scaffold-import';
+} from 'bb-plugin-svaib-view-pilot/scaffold-import';
+export * from 'bb-plugin-svaib-view-pilot/scaffold-import';
 const fail = (code: ScaffoldImportError['code'], message: string): never => { throw new ScaffoldImportError(code, message); };
 const sha = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 const kindOf = (s: BigIntStats): SnapshotKind => s.isFile() ? 'file' : s.isDirectory() ? 'directory' : s.isSymbolicLink() ? 'symlink' : 'other';
@@ -66,7 +66,7 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
       const names: string[] = [];
       for await (const child of await opendir(directoryPath)) {
         signal?.throwIfAborted(); names.push(child.name);
-        if (entries.length + names.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного Screen. Выберите меньший согласованный корень.');
+        if (entries.length + names.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного View. Выберите меньший согласованный корень.');
       }
       names.sort();
       const children: [string, SnapshotKind][] = [];
@@ -78,12 +78,12 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
         if (!Number.isSafeInteger(entry.size)) fail('too_large', 'Размер элемента не поддерживается.');
         if (kind === 'file' && before.size > BigInt(limits.maxFileBytes)) entry.opaqueReason ??= 'file_size';
         entries.push(entry);
-        if (entries.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного Screen.');
+        if (entries.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного View.');
         if (entry.opaqueReason) continue;
         if (kind === 'directory') {
           const collection = allowDepthBoundary && ['meetings', 'zz_archive'].includes(name);
           if (!collection && depth >= limits.maxDepth && (depth >= scaffoldImportLimits.maxDepth || !expandedPaths.some(expanded => expanded === path || expanded.startsWith(path + '/')))) {
-            if (!allowDepthBoundary) fail('too_large', 'Каркас слишком глубоко вложен для одного Screen.');
+            if (!allowDepthBoundary) fail('too_large', 'Каркас слишком глубоко вложен для одного View.');
             entry.opaqueReason = 'depth_limit';
             continue;
           }

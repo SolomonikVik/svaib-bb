@@ -3,7 +3,7 @@ import { UrlLink } from '@get-bb/plugin-sdk/app';
 import type { Action, AspectId, AspectItem, SourceRef, Workspace, WorkspaceAspect } from './types';
 import MetricsPanel from './MetricsPanel';
 import MetricsDashboardPanel from './MetricsDashboard';
-import { MetricsScreen } from './MetricsScreen';
+import { MetricsView } from './MetricsView';
 import { useMetricPreferences } from './use-metric-preferences';
 import './workplace-views.css';
 
@@ -150,10 +150,10 @@ export function AspectPage(props: ViewProps & { aspectId: AspectId }) {
   const refreshAction = workspace.actions.find(action => action.effect === 'metrics-refresh');
   const serverMetrics = aspectId === 'metrics' && !!workspace.companyId && !!props.accountId;
   return <section className="svb-depth-page"><Breadcrumb onNavigate={onNavigate} aspectId={aspectId} />
-    <header className="svb-depth-heading"><span className={`svb-aspect-badge svb-aspect--${aspectId}`}><AspectIcon id={aspectId} /></span><div><h1>{meta.title}</h1><p>{aspect?.summary || meta.hint}</p></div></header>
+    {!serverMetrics && <header className="svb-depth-heading"><span className={`svb-aspect-badge svb-aspect--${aspectId}`}><AspectIcon id={aspectId} /></span><div><h1>{meta.title}</h1><p>{aspect?.summary || meta.hint}</p></div></header>}
     <nav className="svb-aspect-switcher" aria-label="Ракурсы управления">{ASPECTS.map(a => <button key={a.id} aria-current={a.id === aspectId ? 'page' : undefined} onClick={() => onNavigate({ kind: 'aspect', aspectId: a.id })}>{a.title}</button>)}</nav>
-    <div className="svb-depth-layout"><main className="svb-depth-content"><div className="svb-content-heading"><h2>{meta.content}</h2>{!serverMetrics && <span>Снимок · {dateLabel((aspectId === 'metrics' && workspace.metricsDashboard?.preparedAt) || aspect?.snapshotAt || workspace.snapshotAt)}</span>}</div>
-      {serverMetrics && <MetricsScreen key={`${props.accountId}:${workspace.id}`} workspaceId={workspace.id} accountId={props.accountId!} />}
+    <div className="svb-depth-layout"><main className="svb-depth-content">{!serverMetrics && <div className="svb-content-heading"><h2>{meta.content}</h2><span>Снимок · {dateLabel((aspectId === 'metrics' && workspace.metricsDashboard?.preparedAt) || aspect?.snapshotAt || workspace.snapshotAt)}</span></div>}
+      {serverMetrics && <MetricsView key={`${props.accountId}:${workspace.id}`} workspaceId={workspace.id} accountId={props.accountId!} />}
       {aspectId === 'metrics' && !serverMetrics && workspace.metricsDashboard && <><p className="svb-md-snapshot-note">Локальный снимок этого рабочего места.</p>{metricPreferences.error && <p role="status" className="svb-preferences-note">Настройки вида показателей: {metricPreferences.error}</p>}<MetricsDashboardPanel key={workspace.id} data={workspace.metricsDashboard} preferences={metricPreferences.preferences} onRefresh={refreshAction ? () => props.onAction(refreshAction, { aspectId: 'metrics' }) : undefined} refreshUnavailable={refreshAction?.available === false ? refreshAction.unavailableReason || 'Обновление пока недоступно' : undefined} /></>}
       {!!aspect?.items.length ? <div className="svb-item-grid">{aspect.items.map(item => <ItemCard key={item.id} item={item} aspectId={aspectId} onNavigate={onNavigate} />)}</div> : !(aspectId === 'metrics' && (serverMetrics || workspace.metricsDashboard || workspace.metrics)) && <div className="svb-content-empty"><AspectIcon id={aspectId} /><h3>Картина ещё не собрана</h3><p>Здесь появятся {aspectId === 'team' ? 'люди, их роли и ответственность' : meta.content.toLowerCase()}. Пока можно открыть документы или поработать с партнёром.</p></div>}
       {aspectId === 'metrics' && !serverMetrics && !workspace.metricsDashboard && workspace.metrics && <MetricsPanel data={workspace.metrics} />}

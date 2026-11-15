@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { CatalogWorkspace, WorkplaceConfig } from './config';
 import type { AccountView } from './experiments/account-prototype/contracts';
 import { validatePersistentFolder } from './experiments/account-prototype/folder-selection';
-import { readScreenCompanyBinding, type PersistentRootValidator, type VerifiedScreenCompany } from './screen-native-context';
+import { readViewCompanyBinding, type PersistentRootValidator, type VerifiedViewCompany } from './view-native-context';
 
 export const companySelector = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
 export const companyRowSchema = z.object({ companyId: companySelector, name: z.string(), role: z.enum(['owner', 'member']),
@@ -28,7 +28,7 @@ const bindingSchema = z.object({ environmentId: z.string(), projectId: z.string(
 type Binding = z.infer<typeof bindingSchema>;
 const preferencesSchema = z.record(companySelector, bindingSchema);
 type AccountPort = { account: { view(): Promise<AccountView> }; epoch(): number;
-  verifiedCompany(companyId: string, signal?: AbortSignal): Promise<VerifiedScreenCompany> };
+  verifiedCompany(companyId: string, signal?: AbortSignal): Promise<VerifiedViewCompany> };
 export const companyWorkspaceId = (company: string) => 'company-' + createHash('sha256').update(company).digest('hex').slice(0, 24);
 export const isCompanyWorkspace = (id: string) => /^company-[a-f0-9]{24}$/.test(id);
 const scopeSchema = z.object({ root: z.string(), hostId: z.string() }).strict();
@@ -87,7 +87,7 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
     }
     if (options.validateRoot) await options.validateRoot(environment.path, environment.hostId, environment);
     else await validatePersistentFolder(sdk, environment.hostId, environment, environment.path);
-    const binding = await readScreenCompanyBinding(environment.path);
+    const binding = await readViewCompanyBinding(environment.path);
     if (binding.companyId !== companyId || binding.realRoot !== environment.path || (expected && (expected.root !== binding.realRoot ||
         expected.projectId !== project.id || expected.hostId !== environment.hostId)))
       throw new Error('Эта папка привязана к другой компании или была изменена. Проверь подключение пространства.');
@@ -118,7 +118,7 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
         description: 'Задать вопрос по материалам компании.', icon: 'MessageSquare', prompt: 'Помоги разобраться с моим вопросом по компании.',
         method: 'Начни с инструкций и карты выбранного пространства. Поднимай только нужные материалы.', sourceIds: [] }],
     }), ...(prepared ? { metricsUpdateWorkspaceId: prepared.id } : {}), id: companyWorkspaceId(companyId), name, companyId, root, projectId: project.id, environmentId: environment.id, hostId: environment.hostId };
-    // Adopted company tabs read the server Screen. Keep legacy snapshots on disk
+    // Adopted company tabs read the server View. Keep legacy snapshots on disk
     // for explicit migration, but do not expose an independent editable copy.
     delete workspace.metrics;
     delete workspace.metricsDashboard;
@@ -126,13 +126,13 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
     return { workspace, legacyId: prepared?.id, projectName: project.name, member: verified.member };
   }
   async function catalog(): Promise<{ accountId: string | null; companies: CompanyDirectory['companies'];
-    workspaces: { workspace: CatalogWorkspace; visible: boolean; member: VerifiedScreenCompany }[]; replaced: string[] }> {
+    workspaces: { workspace: CatalogWorkspace; visible: boolean; member: VerifiedViewCompany }[]; replaced: string[] }> {
     const p = await principal();
     const [claimedIds, scopes, legacy] = await Promise.all([claimedLegacyIds(), claimedScopes(), options.legacy()]);
     const claimed = [...new Set([...claimedIds, ...legacy.workspaces.filter(w => matchesCompanyProfileScope(w, scopes)).map(w => w.id)])];
     if (!p.id) return { accountId: null, companies: [], workspaces: [], replaced: claimed };
     const prefs = await preferences(p.id);
-    const workspaces: { workspace: CatalogWorkspace; visible: boolean; member: VerifiedScreenCompany }[] = [];
+    const workspaces: { workspace: CatalogWorkspace; visible: boolean; member: VerifiedViewCompany }[] = [];
     const replaced: string[] = [...claimed];
     const companies = await Promise.all(p.companies.map(async c => {
       const binding = prefs[c.company_id];

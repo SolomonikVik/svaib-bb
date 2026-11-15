@@ -40,7 +40,7 @@ export type FolderInventory = {
   environments: { list(args: { hostId: string; limit: number; offset: number; status?: 'destroyed' }): Promise<FolderEnvironment[]> };
 };
 
-/** The same conservative boundary is used by the handoff and every Screen resolve. */
+/** The same conservative boundary is used by the handoff and every View resolve. */
 export async function persistentFolderExclusions(sdk: FolderInventory,
   hostId: string, env: FolderEnvironment, options?: Options): Promise<string[]> {
   const system = await sdk.system.config();

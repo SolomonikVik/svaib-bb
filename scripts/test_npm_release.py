@@ -22,7 +22,7 @@ class ReleaseTests(unittest.TestCase):
         self.package = {
             "name": release.NAME, "version": "0.5.5", "private": True,
             "bb": {"description": "Fixture"},
-            "dependencies": {release.LOCAL_DEPENDENCY: "file:./components/screen", "zod": "^4.6.5"},
+            "dependencies": {release.LOCAL_DEPENDENCY: "file:./components/view", "zod": "^4.6.5"},
             "scripts": {"prepare": "must not execute"},
         }
         release.write_json(self.root / "package.json", self.package)
@@ -72,7 +72,7 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(dependency=dependency), self.assertRaises(ValueError):
                 release.prepare(self.root, "v0.5.5")
 
-    def test_unexported_screen_path_is_refused(self):
+    def test_unexported_view_path_is_refused(self):
         self.package["dependencies"][release.LOCAL_DEPENDENCY] = "file:../screen/pilot"
         release.write_json(self.root / "package.json", self.package)
         with self.assertRaises(ValueError):

@@ -16,7 +16,7 @@ import urllib.parse
 
 NAME = "bb-plugin-svaib-workplace"
 REPOSITORY = "https://github.com/SolomonikVik/svaib-bb"
-LOCAL_DEPENDENCY = "bb-plugin-svaib-screen-pilot"
+LOCAL_DEPENDENCY = "bb-plugin-svaib-view-pilot"
 # Match the oldest admitted BB so its SDK0 backend can use the prebuilt bundle.
 BUILD_BB_VERSION = "0.48.1"
 BUILD_SDK_VERSION = "0.6.104"
@@ -49,9 +49,9 @@ def prepare(root, tag):
     validate_identity(package, tag)
     dependencies = package.get("dependencies", {})
     if dependencies.get(LOCAL_DEPENDENCY) not in (
-        "file:./components/screen", "file:components/screen"
+        "file:./components/view", "file:components/view"
     ):
-        raise ValueError("Expected the exported local Screen dependency")
+        raise ValueError("Expected the exported local View dependency")
     for name, value in dependencies.items():
         if name != LOCAL_DEPENDENCY and not re.fullmatch(r"[0-9^~*<>=| .xX-]+", value):
             raise ValueError("Only registry version dependencies are allowed: " + name)
@@ -116,7 +116,7 @@ def verify(root, tag):
     package = read_json(root / "package.json")
     validate_identity(package, tag)
     if package.get("private") or LOCAL_DEPENDENCY not in package.get("bundleDependencies", []):
-        raise ValueError("Package must be public and include the local Screen dependency")
+        raise ValueError("Package must be public and include the local View dependency")
     if read_json(root / "npm-release.json")["tag"] != tag:
         raise ValueError("Release receipt does not match the tag")
     for kind in ("server", "app", "host"):
@@ -135,7 +135,7 @@ def verify(root, tag):
     if not (root / "dist/app.css").is_file():
         raise ValueError("Missing frontend stylesheet")
     if not (root / "node_modules" / LOCAL_DEPENDENCY / "package.json").is_file():
-        raise ValueError("Missing bundled Screen component")
+        raise ValueError("Missing bundled View component")
     verify_portable(root)
     spec = importlib.util.spec_from_file_location("prepare_methods", root / "scripts/prepare_methods.py")
     helper = importlib.util.module_from_spec(spec)

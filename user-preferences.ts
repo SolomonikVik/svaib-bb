@@ -1,6 +1,6 @@
 import type { PluginKvStorage } from '@get-bb/plugin-sdk';
 import type { AccountView } from './experiments/account-prototype/contracts';
-import { defaultUserPreferences, preferencesUpdateSchema, userPreferencesSchema, type PreferencesView } from './user-preferences-contract';
+import { defaultUserPreferences, preferencesUpdateSchema, userPreferencesSchema, USER_PREFERENCES_BYTE_BUDGET, type PreferencesView } from './user-preferences-contract';
 import { z } from 'zod';
 
 const storedSchema = z.object({ schema: z.literal(1), revision: z.number().int().nonnegative(), preferences: userPreferencesSchema }).strict();
@@ -53,6 +53,11 @@ export function createUserPreferences(options: { kv: PluginKvStorage; account: A
           for (const old of keys.slice(0, Math.max(0, keys.length - 128))) delete preferences.metricViews[old];
         }
         const saved = storedSchema.parse({ schema: 1, revision: stored.revision + 1, preferences });
+        const oldest = Object.keys(saved.preferences.metricViews).filter(viewKey => viewKey !== metricView?.key);
+        while (Buffer.byteLength(JSON.stringify(saved), 'utf8') > USER_PREFERENCES_BYTE_BUDGET && oldest.length)
+          delete saved.preferences.metricViews[oldest.shift()!];
+        if (Buffer.byteLength(JSON.stringify(saved), 'utf8') > USER_PREFERENCES_BYTE_BUDGET)
+          throw new Error('Личные настройки превышают допустимый размер. Сократи выбранные виды.');
         unchanged(owner.epoch);
         await options.kv.set(key(id), saved);
         unchanged(owner.epoch);

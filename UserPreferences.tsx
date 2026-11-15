@@ -33,8 +33,8 @@ function preferenceFields(patch: PreferencePatch) {
   const fields = Object.keys(patch).filter(key => key !== 'panels' && key !== 'metricView');
   for (const key of Object.keys(patch.panels ?? {})) fields.push('panels.' + key);
   if (patch.metricView) {
-    for (const field of ['table', 'showPlan'] as const) {
-      if (patch.metricView[field] !== undefined) fields.push(JSON.stringify(['metric', patch.metricView.key, field]));
+    for (const field of Object.keys(patch.metricView)) {
+      if (field !== 'key') fields.push(JSON.stringify(['metric', patch.metricView.key, field]));
     }
   }
   return fields;

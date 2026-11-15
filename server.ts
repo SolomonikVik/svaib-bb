@@ -14,9 +14,9 @@ import { applyMetricsUpdate } from './metrics-update';
 import { registerAccountModule } from './experiments/account-prototype/account-module';
 import { CONNECTION_SKILL } from './experiments/account-prototype/connection';
 import { supportsConnection } from './experiments/account-prototype/connection-providers';
-import { registerScreenModule } from './screen-module';
-import { registerMetricsScreenModule } from './metrics-screen-module';
-import { createScreenPluginContext, type PersistentRootValidator } from './screen-native-context';
+import { registerViewModule } from './view-module';
+import { registerMetricsViewModule } from './metrics-view-module';
+import { createViewPluginContext, type PersistentRootValidator } from './view-native-context';
 import { companyWorkspaceRpc, createCompanyWorkspaces, isCompanyWorkspace, matchesCompanyProfileScope, type CompanyProfileScope } from './company-workspaces';
 import { userPreferencesRpc } from './user-preferences-contract';
 import { createUserPreferences } from './user-preferences';
@@ -192,7 +192,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     return { ...config, workspaces };
   }
   // Each module uses the root plugin identity and production credential store.
-  let workContext: ReturnType<typeof createScreenPluginContext>;
+  let workContext: ReturnType<typeof createViewPluginContext>;
   const account = await registerAccountModule(bb, { registerConfigure: false,
     validateWorkspaceMove: (...args) => workContext.validateWorkspaceMove(...args), sessionStore: {
     read: async () => (await settings.get()).productionOAuthSession ?? '',
@@ -207,7 +207,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     onScopesChanged: scopes => { claimedScopes = scopes; } });
   claimedLegacy = new Set(await companies.claimedLegacyIds());
   claimedScopes = await companies.claimedScopes();
-  const metricsScreen = registerMetricsScreenModule(bb, { account, validatePersistentRootForTesting,
+  const metricsView = registerMetricsViewModule(bb, { account, validatePersistentRootForTesting,
     resolveWorkspace: async id => {
       const catalog = await companies.catalog();
       const page = catalog.workspaces.find(item => item.visible && item.workspace.id === id);
@@ -215,8 +215,8 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
       return page;
     },
   });
-  const screen = registerScreenModule(bb, { account, validatePersistentRootForTesting });
-  workContext = createScreenPluginContext({ sdk: bb.sdk, kv: bb.storage.kv, account, validatePersistentRootForTesting });
+  const view = registerViewModule(bb, { account, validatePersistentRootForTesting });
+  workContext = createViewPluginContext({ sdk: bb.sdk, kv: bb.storage.kv, account, validatePersistentRootForTesting });
   const contextTool = 'svaib_workspace_context';
   bb.agents.registerTool({ name: contextTool,
     description: 'Проверяет текущий доступ, компанию и рабочую папку действия, выбранного во вкладке svaib, и возвращает его инструкцию.',
@@ -274,20 +274,20 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     }
     const setup = context.pluginMetadata.task === 'svaib-connect';
     const supported = supportsConnection(context.provider.id);
-    const base = setup ? account.configure(context) : own && metricsScreen.isTask(context.pluginMetadata) ? metricsScreen.configure(context) : own ? workplaceConfiguration(context)
+    const base = setup ? account.configure(context) : own && metricsView.isTask(context.pluginMetadata) ? metricsView.configure(context) : own ? workplaceConfiguration(context)
       : supported ? account.configure(context) : { tools: [], skills: [] };
     const finishedSetup = setup && context.pluginMetadata.phase === 'work';
     // BB freezes tools when constructing the provider session. A metadata-only
-    // setup -> work transition cannot add Screen to that already running session.
+    // setup -> work transition cannot add View to that already running session.
     // Pre-stage only a valid scoped setup; the handlers still authorize the
     // actual account/company/workspace on every call.
     const configuredSetup = setup && (base.tools?.length ?? 0) > 0;
-    const visual = supported && (!setup || finishedSetup || configuredSetup) ? screen.configure(context) : { tools: [], skills: [] };
+    const visual = supported && (!setup || finishedSetup || configuredSetup) ? view.configure(context) : { tools: [], skills: [] };
     const instructions = configuredSetup && base.instructions && visual.instructions
       ? `${base.instructions}\n\nПосле успешного whoami, если согласованный сценарий включает подготовку пространства, продолжи его по правилам пользователя. ${visual.instructions}`
       : supported && !own ? [base.instructions, visual.instructions].filter(Boolean).join('\n\n') : base.instructions;
     return {
-      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? []), ...(supported && (!setup || finishedSetup || configuredSetup) ? [metricsScreen.tool] : [])])],
+      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? []), ...(supported && (!setup || finishedSetup || configuredSetup) ? [metricsView.tool] : [])])],
       skills: [...new Set([...(base.skills ?? []), ...(visual.skills ?? []), ...(!setup && supported ? [CONNECTION_SKILL] : [])])],
       // Native/work chats discover available tools without receiving another task's instructions.
       ...(instructions ? { instructions } : {}),
@@ -389,7 +389,7 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
           const config = await currentConfig();
           const target = config.workspaces.filter(w => w.id === requestedId || w.metricsUpdateWorkspaceId === requestedId);
           if (target.length !== 1) throw new Error('Нет действительного доступа к рабочему месту этих графиков. Открой нужную компанию заново.');
-          if (target[0].companyId) throw new Error('Эта страница использует серверный Screen. Обнови его через общий MCP screen_update; apply-metrics доступен только локальному режиму.');
+          if (target[0].companyId) throw new Error('Эта страница использует серверный View. Обнови его через общий MCP view_update; apply-metrics доступен только локальному режиму.');
           const scope = (w: CatalogWorkspace) => JSON.stringify([w.companyId ?? null, w.root, w.projectId, w.environmentId, w.hostId]);
           const expected = scope(target[0]);
           const physicalId = target[0].metricsUpdateWorkspaceId ?? target[0].id;

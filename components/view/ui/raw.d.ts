@@ -1,0 +1,1 @@
+export type ScaffoldFrameMessage = { type: 'view-ready' } | { type: 'view-change' | 'view-handoff'; config: unknown } | { type: 'view-resize'; height: unknown } | { type: 'view-ui'; ui: unknown } | { type: 'view-expand'; nodeId: unknown };
