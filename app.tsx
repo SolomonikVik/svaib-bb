@@ -7,7 +7,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { PluginNavPanelProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
-import type { rpcContract as accountRpcContract } from './experiments/account-prototype/account-module';
+import type { rpcContract as accountRpcContract } from './account/account-module';
 import type { Action, ActionPreview, Overview, SourceDocument, SourceRef, Workspace, WorkspaceId } from "./types";
 import "./app.css";
 import { WorkspaceOverview, AspectPage, ItemPage, ActionsPage, DocumentsPage, placeLabel } from "./WorkplaceViews";
@@ -18,14 +18,14 @@ import { presentationMarkdown, registeredSourceForHref } from "./document-presen
 import "./document-presentation.css";
 import { PersonalOverview, PersonalSectionPage, PersonalActionsPage, PersonalDocumentsPage } from "./PersonalViews";
 import type { PersonalLibraryState } from "./PersonalViews";
-import { AccountPage, AccountRouter } from "./experiments/account-prototype/app";
+import { AccountPage, AccountRouter } from "./account/app";
 import { ViewPanel } from "./ViewPanel";
 import { PersonalRuntimePreparation, PersonalKimiSetup } from './PersonalSetupPanels';
 import { UserPreferencesProvider, useUserPreferences } from './UserPreferences';
 import { defaultUserPreferences, orderWorkspaces, startupRoute } from './user-preferences-contract';
 import { ViewLauncher, useViewLauncher } from "./ViewLauncher";
 import { lastCompanyWorkspace, rememberCompanyWorkspace } from './company-navigation';
-import { clearCabinetSnapshots } from './experiments/account-prototype/cabinet-cache';
+import { clearCabinetSnapshots } from './account/cabinet-cache';
 import { clearCompanyDirectories } from './CompanyList';
 import { readWorkplaceOverview, cacheWorkplaceOverview, clearWorkplaceOverview, workplaceOverviewGeneration, subscribeWorkplaceInvalidation } from './workplace-ui-cache';
 
@@ -160,8 +160,8 @@ function ActionSetup({ workspace, action, context, accountId = null, backLabel, 
     } }, cause => { if (live) setError(report(cause)); });
     return () => { live = false; };
   }, [rpc, workspace.id, action.id, context?.aspectId, context?.itemId, accountId, attempt]);
-  return <section className="svb-setup"><button className="svb-back" onClick={onBack}><Glyph name="ArrowLeft" />{backLabel}</button><div className="svb-setup-heading"><span className="svb-kicker">{personalAssistant ? "Личный ассистент" : "Работа с партнёром"}</span><h1>{action.title}</h1><p>{action.description}</p></div>
-    {!preview ? <Feedback error={error} retry={() => setAttempt(n => n + 1)}>Готовлю контекст задачи…</Feedback> : <><div className="svb-setup-note"><Glyph name="MessageSquare" /><p>{action.mode === "draft-only" ? "Только подготовка: партнёр покажет анализ и черновик. Эта кнопка не меняет документы и не отправляет сообщения." : action.effect === "metrics-refresh" ? "Отправьте готовый запрос: партнёр перечитает источники и обновит графики. Исходные таблицы не изменятся. После завершения нажмите «К графикам»." : personalAssistant ? (freeAssistant ? "Напиши или надиктуй, с чем помочь. Ассистент учтёт твой план; разговор откроется прямо здесь." : "Запрос уже готов — можно уточнить его и отправить. Ассистент подключит нужные инструменты.") : "Задача уже сформулирована. Уточните её своими словами и отправьте партнёру."}</p></div>{error && <Feedback error={error} />}{starting && <Feedback>Открываю рабочий разговор…</Feedback>}<div className="svb-native-composer"><NewThreadComposer key={`${accountId ?? "local"}/${workspace.id}/${action.id}/${context?.aspectId ?? ""}/${context?.itemId ?? ""}/${attempt}`} defaultProjectId={preview.projectId} defaultEnvironment={{ type: "reuse", environmentId: preview.environmentId }} initialPrompt={freeAssistant ? "" : preview.prompt} draftKey={`svaib-workplace/v2/${encodeURIComponent(accountId ?? "local")}/${workspace.id}/${action.id}/${context?.aspectId ?? ""}/${context?.itemId ?? ""}`} layout="document" onSubmit={async request => {
+  return <section className="svb-setup"><button className="svb-back" onClick={onBack}><Glyph name="ArrowLeft" />{backLabel}</button><div className="svb-setup-heading"><span className="svb-kicker">{personalAssistant ? "Личный ассистент" : "Работа с агентом"}</span><h1>{action.title}</h1><p>{action.description}</p></div>
+    {!preview ? <Feedback error={error} retry={() => setAttempt(n => n + 1)}>Готовлю контекст задачи…</Feedback> : <><div className="svb-setup-note"><Glyph name="MessageSquare" /><p>{action.mode === "draft-only" ? "Только подготовка: агент покажет анализ и черновик. Эта кнопка не меняет документы и не отправляет сообщения." : action.effect === "metrics-refresh" ? "Отправьте готовый запрос: агент перечитает источники и обновит графики. Исходные таблицы не изменятся. После завершения нажмите «К графикам»." : personalAssistant ? (freeAssistant ? "Напиши или надиктуй, с чем помочь. Ассистент учтёт твой план; разговор откроется прямо здесь." : "Запрос уже готов — можно уточнить его и отправить. Ассистент подключит нужные инструменты.") : "Задача уже сформулирована. Уточните её своими словами и отправьте агенту."}</p></div>{error && <Feedback error={error} />}{starting && <Feedback>Открываю рабочий разговор…</Feedback>}<div className="svb-native-composer"><NewThreadComposer key={`${accountId ?? "local"}/${workspace.id}/${action.id}/${context?.aspectId ?? ""}/${context?.itemId ?? ""}/${attempt}`} defaultProjectId={preview.projectId} defaultEnvironment={{ type: "reuse", environmentId: preview.environmentId }} initialPrompt={freeAssistant ? "" : preview.prompt} draftKey={`svaib-workplace/v2/${encodeURIComponent(accountId ?? "local")}/${workspace.id}/${action.id}/${context?.aspectId ?? ""}/${context?.itemId ?? ""}`} layout="document" onSubmit={async request => {
       const sequence = ++submitSequence.current;
       const isCurrent = () => liveSetup.current && sequence === submitSequence.current;
       setStarting(true); setError(null);
@@ -195,7 +195,7 @@ function ActionSetup({ workspace, action, context, accountId = null, backLabel, 
 type View = Place | { kind: "source"; sourceId: string; returnTo: Place } | { kind: "action"; action: Action; context?: ActionContext; returnTo: Place } | { kind: "thread"; threadId: string; title: string; returnTo: Place; metricsRefresh?: boolean };
 function EmptyWorkspaces() {
   const navigate = useBbNavigate();
-  return <section className="svb-empty" role="status"><Glyph name="Layers" /><h2>Рабочие пространства</h2><p>Здесь появятся подключённые пространства. Работу с партнёром можно начать в обычном чате BB.</p><button className="svb-primary-button" onClick={() => navigate.toPluginPanel('workplace', { subPath: 'settings/account' })}>Мой svaib<Glyph name="ArrowUpRight" /></button></section>;
+  return <section className="svb-empty" role="status"><Glyph name="Layers" /><h2>Рабочие пространства</h2><p>Здесь появятся подключённые пространства. Работу с агентом можно начать в обычном чате BB.</p><button className="svb-primary-button" onClick={() => navigate.toPluginPanel('workplace', { subPath: 'settings/account' })}>Мой svaib<Glyph name="ArrowUpRight" /></button></section>;
 }
 function WorkplaceRouter(props: PluginNavPanelProps) {
   return <UserPreferencesProvider><WorkplaceRouterContent {...props} /></UserPreferencesProvider>;

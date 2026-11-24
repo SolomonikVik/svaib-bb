@@ -26,8 +26,6 @@ class ReleaseTests(unittest.TestCase):
             "scripts": {"prepare": "must not execute"},
         }
         release.write_json(self.root / "package.json", self.package)
-        (self.root / "methods").mkdir()
-        release.write_json(self.root / "methods/manifest.json", {"method": {"version": "0.11.0"}})
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture",
@@ -42,12 +40,19 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("private", package)
         self.assertNotIn("scripts", package)
         self.assertIn("dist/", package["files"])
-        self.assertIn("methods/", package["files"])
+        self.assertNotIn("methods/", package["files"])
+        self.assertNotIn("scripts/prepare_methods.py", package["files"])
         self.assertIn("scripts/kimi-diagnostic-fields.mjs", package["files"])
         self.assertIn("scripts/kimi-diagnostic-fields.d.mts", package["files"])
         self.assertEqual(package["bundleDependencies"], [release.LOCAL_DEPENDENCY])
         self.assertEqual(package["publishConfig"]["registry"], "https://registry.npmjs.org/")
         self.assertEqual(release.read_json(self.root / "npm-release.json")["tag"], "v0.5.5")
+
+    def test_stale_git_export_cannot_be_packed(self):
+        (self.root / "methods").mkdir()
+        with self.assertRaisesRegex(ValueError, "bundled Harness"):
+            release.prepare(self.root, "v0.5.5")
+        self.assertEqual(release.read_json(self.root / "package.json"), self.package)
 
     def test_wrong_bb_builder_or_sdk_refuses_even_when_package_dependency_is_pinned(self):
         meta = {"sdkVersion": "0.6.104", "builtWith": {

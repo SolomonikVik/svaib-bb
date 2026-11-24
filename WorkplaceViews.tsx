@@ -30,7 +30,7 @@ export type ViewProps = {
 export function placeLabel(place: Place, workspace: Workspace): string {
   if (workspace.personal) {
     if (place.kind === 'personal-section') return workspace.personal.sections.find(section => section.id === place.sectionId)?.title ?? workspace.name;
-    return place.kind === 'actions' ? 'С партнёром' : place.kind === 'sources' ? 'Материалы и архив' : workspace.name;
+    return place.kind === 'actions' ? 'С агентом' : place.kind === 'sources' ? 'Материалы и архив' : workspace.name;
   }
   if (place.kind === 'aspect') return ASPECTS.find(a => a.id === place.aspectId)?.title ?? 'Ракурс';
   if (place.kind === 'item') return workspace.aspects?.find(a => a.id === place.aspectId)?.items.find(i => i.id === place.itemId)?.title ?? 'Карточка';
@@ -70,7 +70,7 @@ function ActionList({ actions, onAction }: { actions: Action[]; onAction: (actio
   const tasks = actions.filter(action => action.kind !== 'role');
   const roles = actions.filter(action => action.kind === 'role');
   if (!actions.length) return <p className="svb-empty-copy">Для этого контекста пока нет подготовленных действий.</p>;
-  return <>{tasks.length > 0 && <div className="svb-partner-actions">{tasks.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div>}{roles.length > 0 && <div className="svb-partner-roles"><span className="svb-mini-label">Посмотреть вместе с партнёром</span>{roles.map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div>}</>;
+  return <>{tasks.length > 0 && <div className="svb-partner-actions">{tasks.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div>}{roles.length > 0 && <div className="svb-partner-roles"><span className="svb-mini-label">Посмотреть вместе с агентом</span>{roles.map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div>}</>;
 }
 function relevantActions(workspace: Workspace, aspect: WorkspaceAspect | undefined, aspectId: AspectId, item?: AspectItem) {
   const ids = item ? item.actionIds : aspect?.actionIds ?? [];
@@ -92,7 +92,7 @@ function ContextTools({ workspace, aspect, aspectId, item, onSource, onAction }:
   const sources = workspace.sources.filter(source => ids.includes(source.id));
   const actions = relevantActions(workspace, aspect, aspectId, item);
   return <aside className="svb-context-tools" aria-label="Работа с выбранным контекстом">
-    <section><h2><span className="svb-partner-dot" aria-hidden="true" />С партнёром</h2><ActionList actions={actions} onAction={action => onAction(action, { aspectId, ...(item ? { itemId: item.id } : {}) })} /></section>
+    <section><h2><span className="svb-partner-dot" aria-hidden="true" />С агентом</h2><ActionList actions={actions} onAction={action => onAction(action, { aspectId, ...(item ? { itemId: item.id } : {}) })} /></section>
     <section><h2>Документы</h2><DocumentList sources={sources} onSource={onSource} /></section>
   </aside>;
 }
@@ -124,10 +124,10 @@ export function WorkspaceOverview({ workspace, onNavigate, onSource, onAction }:
         return <button key={meta.id} className={`svb-aspect-card svb-aspect--${meta.id}`} onClick={() => onNavigate({ kind: 'aspect', aspectId: meta.id })}><AspectIcon id={meta.id} /><Arrow /><strong>{meta.title}</strong><span>{aspect?.summary || meta.hint}</span></button>;
       })}</div>
     </section>
-    <div className="svb-dashboard-bottom"><section><header className="svb-block-heading"><h2><span className="svb-partner-dot" aria-hidden="true" />С партнёром</h2><button className="svb-text-button" onClick={() => onNavigate({ kind: 'actions' })}>Все действия<Arrow /></button></header>{quickActions.length ? <div className="svb-quick-actions">{quickActions.slice(0, 3).map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div> : <p className="svb-empty-copy">Откройте ракурс — там доступны действия по теме.</p>}</section>
+    <div className="svb-dashboard-bottom"><section><header className="svb-block-heading"><h2><span className="svb-partner-dot" aria-hidden="true" />С агентом</h2><button className="svb-text-button" onClick={() => onNavigate({ kind: 'actions' })}>Все действия<Arrow /></button></header>{quickActions.length ? <div className="svb-quick-actions">{quickActions.slice(0, 3).map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div> : <p className="svb-empty-copy">Откройте ракурс — там доступны действия по теме.</p>}</section>
       <section><header className="svb-block-heading"><h2>Документы</h2><button className="svb-text-button" onClick={() => onNavigate({ kind: 'sources' })}>Все документы<Arrow /></button></header><DocumentList sources={workspace.sources.slice(0, 2)} onSource={onSource} /></section></div>
     {workspace.planner && <div className="svb-planner-link"><span>Личный план</span><UrlLink href={workspace.planner.url}>{workspace.planner.title}<Arrow /></UrlLink></div>}
-    <footer className="svb-dashboard-footer">Работа на партнёре. Решения — за вами.</footer>
+    <footer className="svb-dashboard-footer">Агент берёт работу на себя. Решения — за вами.</footer>
   </div>;
 }
 
@@ -155,7 +155,7 @@ export function AspectPage(props: ViewProps & { aspectId: AspectId }) {
     <div className="svb-depth-layout"><main className="svb-depth-content">{!serverMetrics && <div className="svb-content-heading"><h2>{meta.content}</h2><span>Снимок · {dateLabel((aspectId === 'metrics' && workspace.metricsDashboard?.preparedAt) || aspect?.snapshotAt || workspace.snapshotAt)}</span></div>}
       {serverMetrics && <MetricsView key={`${props.accountId}:${workspace.id}`} workspaceId={workspace.id} accountId={props.accountId!} />}
       {aspectId === 'metrics' && !serverMetrics && workspace.metricsDashboard && <><p className="svb-md-snapshot-note">Локальный снимок этого рабочего места.</p>{metricPreferences.error && <p role="status" className="svb-preferences-note">Настройки вида показателей: {metricPreferences.error}</p>}<MetricsDashboardPanel key={workspace.id} data={workspace.metricsDashboard} preferences={metricPreferences.preferences} onRefresh={refreshAction ? () => props.onAction(refreshAction, { aspectId: 'metrics' }) : undefined} refreshUnavailable={refreshAction?.available === false ? refreshAction.unavailableReason || 'Обновление пока недоступно' : undefined} /></>}
-      {!!aspect?.items.length ? <div className="svb-item-grid">{aspect.items.map(item => <ItemCard key={item.id} item={item} aspectId={aspectId} onNavigate={onNavigate} />)}</div> : !(aspectId === 'metrics' && (serverMetrics || workspace.metricsDashboard || workspace.metrics)) && <div className="svb-content-empty"><AspectIcon id={aspectId} /><h3>Картина ещё не собрана</h3><p>Здесь появятся {aspectId === 'team' ? 'люди, их роли и ответственность' : meta.content.toLowerCase()}. Пока можно открыть документы или поработать с партнёром.</p></div>}
+      {!!aspect?.items.length ? <div className="svb-item-grid">{aspect.items.map(item => <ItemCard key={item.id} item={item} aspectId={aspectId} onNavigate={onNavigate} />)}</div> : !(aspectId === 'metrics' && (serverMetrics || workspace.metricsDashboard || workspace.metrics)) && <div className="svb-content-empty"><AspectIcon id={aspectId} /><h3>Картина ещё не собрана</h3><p>Здесь появятся {aspectId === 'team' ? 'люди, их роли и ответственность' : meta.content.toLowerCase()}. Пока можно открыть документы или поработать с агентом.</p></div>}
       {aspectId === 'metrics' && !serverMetrics && !workspace.metricsDashboard && workspace.metrics && <MetricsPanel data={workspace.metrics} />}
     </main><ContextTools {...props} aspect={aspect} /></div>
   </section>;
@@ -175,7 +175,7 @@ export function ActionsPage(props: ViewProps) {
   const [filter, setFilter] = useState<AspectId | 'all'>('all');
   const itemOnlyIds = itemOnlyActions(workspace);
   const actions = workspace.actions.filter(action => !itemOnlyIds.has(action.id) && (filter === 'all' || action.aspectIds?.includes(filter) || workspace.aspects?.find(a => a.id === filter)?.actionIds.includes(action.id)));
-  return <section className="svb-depth-page"><Breadcrumb onNavigate={onNavigate} /><header className="svb-library-heading"><span className="svb-kicker">Работа с партнёром</span><h1>С чем поработаем?</h1><p>Выберите задачу. Запрос можно будет уточнить перед отправкой.</p></header><div className="svb-aspect-switcher" role="group" aria-label="Действия по ракурсу"><button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>Все</button>{ASPECTS.map(a => <button key={a.id} aria-pressed={filter === a.id} onClick={() => setFilter(a.id)}>{a.title}</button>)}</div><div className="svb-actions-library"><ActionList actions={actions} onAction={action => onAction(action, filter === 'all' ? undefined : { aspectId: filter })} /></div></section>;
+  return <section className="svb-depth-page"><Breadcrumb onNavigate={onNavigate} /><header className="svb-library-heading"><span className="svb-kicker">Работа с агентом</span><h1>С чем поработаем?</h1><p>Выберите задачу. Запрос можно будет уточнить перед отправкой.</p></header><div className="svb-aspect-switcher" role="group" aria-label="Действия по ракурсу"><button aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>Все</button>{ASPECTS.map(a => <button key={a.id} aria-pressed={filter === a.id} onClick={() => setFilter(a.id)}>{a.title}</button>)}</div><div className="svb-actions-library"><ActionList actions={actions} onAction={action => onAction(action, filter === 'all' ? undefined : { aspectId: filter })} /></div></section>;
 }
 export function DocumentsPage({ workspace, onNavigate, onSource }: ViewProps) {
   const [query, setQuery] = useState('');

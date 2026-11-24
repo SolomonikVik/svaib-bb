@@ -170,7 +170,7 @@ function ViewContent({ transport, invalidate = 0, cacheKey, embedded = false, on
   const liveActions = online && verifiedTransport === transport;
   if (view.publication && view.publicationReady === false) return <main className="sv-view sv-view-metrics" data-view-id={view.id} data-revision={view.revision}>
     <h1>{view.document.title}</h1>
-    <p role="status">{view.refresh?.status === 'failed' ? 'Первое заполнение не завершено. Можно запросить повторное обновление.' : 'Партнёр готовит показатели. Они появятся здесь после проверки источников.'}</p>
+    <p role="status">{view.refresh?.status === 'failed' ? 'Первое заполнение не завершено. Можно запросить повторное обновление.' : 'Агент готовит показатели. Они появятся здесь после проверки источников.'}</p>
     {liveActions && metricsActions?.(view)}
     {error && <p role="alert" className="view-error">{error}</p>}
   </main>;
@@ -182,7 +182,7 @@ function ViewContent({ transport, invalidate = 0, cacheKey, embedded = false, on
     {!embedded && !onlyMetrics && <header className="view-header"><div><span className="view-eyebrow">svaib · View</span><h1>{view.document.title}</h1><p>{view.document.description}</p></div>
       <span className="view-connection">{online ? 'Подключён' : 'Нет связи'}</span></header>}
     {!onlyMetrics && <div className="view-toolbar">{owners.length > 0 && <label>Ответственный <select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">Все</option>{owners.map(owner => <option key={owner}>{owner}</option>)}</select></label>}
-      <button className="view-secondary" title="Перечитать сохранённое представление; источники обновляет партнёр" onClick={() => { setError(''); void load(); }}>Перечитать представление</button></div>
+      <button className="view-secondary" title="Перечитать сохранённое представление; источники обновляет агент" onClick={() => { setError(''); void load(); }}>Перечитать представление</button></div>
     }
     {error && <div role="alert" className="view-error">{error}{onlyMetrics && <button className="view-secondary" onClick={() => void load()}>Повторить загрузку</button>}</div>}
     <div className={`view-blocks view-${view.document.layout}`}>
@@ -198,7 +198,7 @@ function ViewContent({ transport, invalidate = 0, cacheKey, embedded = false, on
           </li>)}</ul>}
       </section>)}
     </div>
-    {view.document.blocks.some(block => block.type === 'tasks') && <footer className="view-submit"><div><strong>Выбрано: {selected.size}</strong><p>Передаём выбор партнёру. Статусы задач в источниках не меняются.</p></div>
+    {view.document.blocks.some(block => block.type === 'tasks') && <footer className="view-submit"><div><strong>Выбрано: {selected.size}</strong><p>Передаём выбор агенту. Статусы задач в источниках не меняются.</p></div>
       {view.canEdit === true && <button onClick={() => void submit()} disabled={busy}>{busy ? 'Сохраняю…' : 'Передать выбранное агенту'}</button>}
       {view.submission && <p role="status" className="view-saved">Выбор сохранён: {view.submission.selectedIds.length}. Если агент не продолжил, попросите его забрать результат.</p>}
     </footer>}

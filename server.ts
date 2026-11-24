@@ -5,15 +5,15 @@ import { defineRpcContract, type BbPluginApi, type PluginAgentConfiguration, typ
 import { z } from 'zod';
 import { registerKimiSetup } from './kimi-setup';
 import { registerRuntimeGate } from './runtime-gate';
+import { migrateSimplifiedWorkplace } from './simplification-migration';
 import { kimiCheckMetadataSchema } from './kimi-contract';
 import { contextualPreviewText, actionPrompt, getAction, getWorkspace, resolveActionContext, validateInstructions, READ_ONLY_RULES } from './catalog';
 import { aspectIdSchema, idSchema, loadConfig, loadConfigSync, workspaceSchema, type CatalogWorkspace, type WorkplaceConfig } from './config';
 import type { ActionContext, ActionPreview, Overview, SourceDocument, SourceRef, StartedAction, WorkspaceId } from './types';
 import { discoverSkills, enrichWorkspaceActions, type SkillCatalog } from './skills';
 import { applyMetricsUpdate } from './metrics-update';
-import { registerAccountModule } from './experiments/account-prototype/account-module';
-import { CONNECTION_SKILL } from './experiments/account-prototype/connection';
-import { supportsConnection } from './experiments/account-prototype/connection-providers';
+import { registerAccountModule } from './account/account-module';
+import { supportsConnection } from './account/connection-providers';
 import { registerViewModule } from './view-module';
 import { registerMetricsViewModule } from './metrics-view-module';
 import { createViewPluginContext, type PersistentRootValidator } from './view-native-context';
@@ -152,18 +152,27 @@ export async function initializePluginForTesting(bb: BbPluginApi, validatePersis
 }
 
 async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTesting?: PersistentRootValidator) {
-  const runtime = registerRuntimeGate(bb);
+  await migrateSimplifiedWorkplace(bb).catch(() => bb.log.warn('Не завершена очистка прежнего служебного состояния подключения. Повтор при следующем запуске.'));
   const settings = bb.settings.define({
+    autoUpdateHarness: { type: 'boolean', label: 'Автоматически обновлять Harness из BB', default: true },
+    autoTrustCodexHooks: { type: 'boolean', label: 'Автоматически принимать хуки svaib в Codex', default: true },
     configPath: { type: 'string', label: 'Локальное описание пространств (абсолютный путь на BB-сервере)', default: '' },
     productionOAuthSession: { type: 'string', label: 'Подключение svaib (служебное, не редактировать)', secret: true },
   });
+  let prepareKimiForComputer: ((provider: string) => Promise<void>) | undefined;
+  const runtime = registerRuntimeGate(bb, async () => {
+    const value = await settings.get(); return { update: value.autoUpdateHarness, trust: value.autoTrustCodexHooks };
+  }, async provider => { await prepareKimiForComputer?.(provider); });
   const initialSettings = await settings.get();
   let configPath = initialSettings.configPath;
   const skillCatalogs = new Map<string, SkillCatalog>();
   const skillScope = (workspace: CatalogWorkspace) => JSON.stringify([workspace.projectId, workspace.environmentId, workspace.hostId]);
   settings.onChange(next => { configPath = next.configPath; skillCatalogs.clear(); });
   const primaryHostId = (await bb.sdk.system.config()).primaryHostId;
-  const kimi = await registerKimiSetup(bb, primaryHostId);
+  const kimi = await registerKimiSetup(bb, primaryHostId, async () => {
+    const value = await settings.get(); return { update: value.autoUpdateHarness, trust: value.autoTrustCodexHooks };
+  });
+  prepareKimiForComputer = kimi.prepareExisting;
   function validateLocal(config: WorkplaceConfig) {
     validateInstructions(config);
     if (config.workspaces.some(w => w.hostId !== primaryHostId)) throw new Error('Этот эксперимент читает только пространства на машине BB-сервера. Удалённые hosts пока не поддерживаются.');
@@ -193,16 +202,16 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   }
   // Each module uses the root plugin identity and production credential store.
   let workContext: ReturnType<typeof createViewPluginContext>;
-  const account = await registerAccountModule(bb, { registerConfigure: false,
-    validateWorkspaceMove: (...args) => workContext.validateWorkspaceMove(...args), sessionStore: {
+  let companies: ReturnType<typeof createCompanyWorkspaces>;
+  const account = await registerAccountModule(bb, { companyFolder: (accountId, companyId, environmentId) =>
+    companies.journeyFolder(accountId, companyId, environmentId), sessionStore: {
     read: async () => (await settings.get()).productionOAuthSession ?? '',
     write: async value => { await settings.experimental_set({ productionOAuthSession: value || null }); },
   } });
-  runtime.setAdmissionGuard(account.admitAuth);
   const userPreferences = createUserPreferences({ kv: bb.storage.kv, account, kimiHidden: async () => (await kimi.status()).hidden });
   let claimedLegacy = new Set<string>();
   let claimedScopes: CompanyProfileScope[] = [];
-  const companies = createCompanyWorkspaces({ sdk: bb.sdk, kv: bb.storage.kv, account, legacy: legacyConfig,
+  companies = createCompanyWorkspaces({ sdk: bb.sdk, kv: bb.storage.kv, account, legacy: legacyConfig,
     validateRoot: validatePersistentRootForTesting, onClaimed: ids => { claimedLegacy = new Set(ids); },
     onScopesChanged: scopes => { claimedScopes = scopes; } });
   claimedLegacy = new Set(await companies.claimedLegacyIds());
@@ -241,12 +250,12 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
   const workplaceConfiguration = (context: PluginAgentConfigurationContext): PluginAgentConfiguration => {
     const empty = { tools: [], skills: [] };
     if (context.origin.pluginId !== bb.pluginId || context.origin.kind !== null) return empty;
-    const unavailable = { ...empty, instructions: `${READ_ONLY_RULES}\n\nНе выполняй выбранное действие: описание пространства, маршрут действия или выбранная среда недоступны/не совпадают. Покажи коротко, что нужно вернуться к рабочему месту и проверить его локальную настройку. Не ищи другое пространство и не обходи это ограничение.` };
+    const unavailable = { ...empty, instructions: `${READ_ONLY_RULES} Не выполняй выбранное действие. Попроси открыть его заново в нужном рабочем месте.` };
     const parsed = actionMetadata.safeParse(context.pluginMetadata);
     if (!parsed.success) return unavailable;
     if (claimedLegacy.has(parsed.data.workspaceId)) return unavailable;
     if (isCompanyWorkspace(parsed.data.workspaceId)) return { tools: [contextTool], skills: [],
-      instructions: `Это новый разговор по действию из рабочего места компании svaib. Перед чтением материалов и выполнением задачи обязательно вызови ${contextTool} без параметров. Он проверит действительный доступ, компанию и выбранную среду и вернёт инструкцию действия. Следуй этой инструкции и правилам пользователя. При ошибке остановись и предложи открыть нужную компанию в кабинете; не подставляй другую папку или компанию.` };
+      instructions: `Перед действием вызови ${contextTool} для проверки доступа и получения поручения. При отказе попроси открыть нужную компанию в кабинете.` };
     try {
       const config = validateLocal(loadConfigSync(configPath));
       const rawWorkspace = config.workspaces.find(w => w.id === parsed.data.workspaceId);
@@ -266,30 +275,22 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     }
   };
   // One configure callback owns dispatch. Metadata routes tasks; handlers still check authority.
+  // Setup orchestration is removed (simplification plan, stage 5): native/work
+  // chats receive available tools without another task's instructions.
   bb.agents.configure(context => {
     const own = context.origin.pluginId === bb.pluginId && context.origin.kind === null;
     if (own && kimiCheckMetadataSchema.safeParse(context.pluginMetadata).success &&
         ['acp-claude-kimi', 'pi'].includes(context.provider.id) && context.host.id === primaryHostId) {
-      return { tools: [], skills: [], instructions: 'Это короткая проверка ответа Kimi. Ответь ровно KIMI_READY. Не используй инструменты, не читай и не меняй файлы. Не начинай подключение svaib или онбординг.' };
+      return { tools: [], skills: [], instructions: 'Ответь ровно KIMI_READY без использования инструментов.' };
     }
-    const setup = context.pluginMetadata.task === 'svaib-connect';
-    const supported = supportsConnection(context.provider.id);
-    const base = setup ? account.configure(context) : own && metricsView.isTask(context.pluginMetadata) ? metricsView.configure(context) : own ? workplaceConfiguration(context)
-      : supported ? account.configure(context) : { tools: [], skills: [] };
-    const finishedSetup = setup && context.pluginMetadata.phase === 'work';
-    // BB freezes tools when constructing the provider session. A metadata-only
-    // setup -> work transition cannot add View to that already running session.
-    // Pre-stage only a valid scoped setup; the handlers still authorize the
-    // actual account/company/workspace on every call.
-    const configuredSetup = setup && (base.tools?.length ?? 0) > 0;
-    const visual = supported && (!setup || finishedSetup || configuredSetup) ? view.configure(context) : { tools: [], skills: [] };
-    const instructions = configuredSetup && base.instructions && visual.instructions
-      ? `${base.instructions}\n\nПосле успешного whoami, если согласованный сценарий включает подготовку пространства, продолжи его по правилам пользователя. ${visual.instructions}`
-      : supported && !own ? [base.instructions, visual.instructions].filter(Boolean).join('\n\n') : base.instructions;
+    const base = own && metricsView.isTask(context.pluginMetadata) ? metricsView.configure(context)
+      : own ? workplaceConfiguration(context) : { tools: [], skills: [] };
+    if (!supportsConnection(context.provider.id)) return base;
+    const visual = view.configure(context);
+    const instructions = base.instructions;
     return {
-      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? []), ...(supported && (!setup || finishedSetup || configuredSetup) ? [metricsView.tool] : [])])],
-      skills: [...new Set([...(base.skills ?? []), ...(visual.skills ?? []), ...(!setup && supported ? [CONNECTION_SKILL] : [])])],
-      // Native/work chats discover available tools without receiving another task's instructions.
+      tools: [...new Set([...(base.tools ?? []), ...(visual.tools ?? []), ...(own ? [] : [metricsView.tool])])],
+      skills: [...new Set([...(base.skills ?? []), ...(visual.skills ?? [])])],
       ...(instructions ? { instructions } : {}),
     };
   });
@@ -346,14 +347,13 @@ async function initializePlugin(bb: BbPluginApi, validatePersistentRootForTestin
     start: async ({ workspaceId, actionId, prompt, ...context }): Promise<StartedAction> => {
       const config = await configWithSkills(workspaceId);
       const preview = previewAction(config, workspaceId, actionId, context);
-      const workspace = getWorkspace(config, workspaceId);
       const defaults = await bb.sdk.projects.defaultExecutionOptions({ projectId: preview.projectId });
       const thread = await bb.sdk.threads.spawn({
         ...(defaults ?? {}),
         projectId: preview.projectId, environment: { type: 'reuse', environmentId: preview.environmentId },
         title: preview.title, visibility: 'visible',
         pluginMetadata: { workspaceId, actionId, ...context, schema: 1 },
-        prompt: `${actionPrompt(workspace, getAction(workspace, actionId), context)}\n\nЗапрос пользователя:\n${prompt}`,
+        prompt,
       });
       return { threadId: thread.id, projectId: preview.projectId };
     },

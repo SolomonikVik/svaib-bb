@@ -5,7 +5,7 @@ export { kimiErrorFields, kimiVersion } from './scripts/kimi-diagnostic-fields.m
 // No free text: even a provider error containing credentials cannot enter the log.
 export const kimiDiagnosticSchema = z.object({
   diagnosticId: z.uuid(), source: z.enum(['backend', 'host']),
-  step: z.enum(['prepare', 'key-replace', 'key-commit', 'runtime', 'adapter-install', 'profile-inspect',
+  step: z.enum(['prepare', 'harness-maintenance', 'key-replace', 'key-commit', 'runtime', 'adapter-install', 'profile-inspect',
     'profile-validate', 'profile-write', 'catalog-fetch', 'catalog-normalize', 'bb-discovery',
     'registration', 'verification', 'refresh', 'migration', 'state', 'cleanup', 'environment', 'binary', 'runtime-probe', 'runtime-download', 'runtime-install']),
   outcome: z.enum(['start', 'success', 'failure', 'fallback', 'skipped', 'progress']),

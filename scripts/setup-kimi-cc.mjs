@@ -368,7 +368,7 @@ async function sameOrNew(path, content, atomic = false) {
   }
 }
 
-function launcherSource(root, legacy = false, previous = false, agentPolicy = true) {
+function launcherSource(root, legacy = false, previous = false, agentPolicy = true, standalone = true) {
   const adapterDir = join(root, 'runtime', 'node_modules', '@agentclientprotocol', 'claude-agent-acp', 'dist');
   return `import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -391,7 +391,13 @@ if (process.argv.includes('--list-models')) {
 } else {
   const apiKey = JSON.parse(readFileSync(join(root, 'credentials.json'), 'utf8')).apiKey;
   const settings = JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'));
-  const env = { ...process.env, ...settings.env, ANTHROPIC_API_KEY: apiKey, CLAUDE_CONFIG_DIR: join(root, 'claude') };
+  ${standalone ? `let prepared = {};
+  try {
+    const saved = JSON.parse(readFileSync(join(root, '..', 'runtime-preparation', 'environment.json'), 'utf8'));
+    for (const name of ['SVAIB_PYTHON', 'PATH', 'CLAUDE_CODE_GIT_BASH_PATH']) if (typeof saved[name] === 'string') prepared[name] = saved[name];
+  } catch { /* A system runtime remains usable without computer preparation. */ }
+  const env = { ...process.env, ...prepared, ...settings.env, ANTHROPIC_API_KEY: apiKey, CLAUDE_CONFIG_DIR: join(root, 'claude') };`
+  : "const env = { ...process.env, ...settings.env, ANTHROPIC_API_KEY: apiKey, CLAUDE_CONFIG_DIR: join(root, 'claude') };"}
   ${legacy ? '' : "for (const name of ['ANTHROPIC_CUSTOM_MODEL_OPTION', 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME', 'ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION', 'ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES', 'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_MODEL_CONFIG', 'MAX_THINKING_TOKENS', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS']) delete env[name];\n  "}delete env.ANTHROPIC_AUTH_TOKEN;
   ${legacy || previous === true ? '' : `// The 256K ceiling applies to plain IDs; [1m] is selected per model from the catalog.
   env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = settings.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS;
@@ -468,7 +474,9 @@ export async function validateProvision(root) {
     const known = name === 'claude/settings.json' ? !!catalog || generatedSettings(ownedSettings, Object.keys(settingsAdditions).length > 0)
       : actual === before || actual === after || actual === interim || name === 'launch.mjs'
         && ([true, 'context'].some(previous => actual === launcherSource(root, false, previous))
-          || actual === launcherSource(root, false, false, false));
+          || actual === launcherSource(root, false, false, false)
+          || [true, false].some(legacy => [true, false, 'context'].some(previous => [true, false].some(policy =>
+            actual === launcherSource(root, legacy, previous, policy, false)))));
     if (!known) throw new Error('Профиль настройки изменён. Существующие файлы сохранены.');
     if (name === 'claude/settings.json') continue;
     if (actual !== after) pending.push([name, after]);

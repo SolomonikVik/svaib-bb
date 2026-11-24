@@ -1,40 +1,41 @@
-import { planScaffold, type AnyScaffoldConfig, type ScaffoldNode } from './scaffold';
 import type { TreeConfig, TreeItem } from './scaffold-tree-model';
 import manifest from './scaffold-catalog.json';
 
-// One-time conversion for views created by the earlier semantic prototype.
-// New edits use the source constructor's tree contract without losing its flags.
-export function toTreeConfig(config: AnyScaffoldConfig): TreeConfig {
-  if (config.schemaVersion === 2) return config;
-  const legacy = config;
-  const plan = planScaffold(legacy);
-  const objects = new Map<string, ScaffoldNode>();
-  function location(node: ScaffoldNode): string {
-    const parent = legacy.nodes.find(item => item.id === node.parentId);
-    return (node.parentId === 'root' ? '' : node.parentId === 'company' ? '01_company/' : location(parent!) + '/') + (node.kind === 'project' ? 'projects/' : '') + node.slug + (node.form === 'file' ? '.md' : '');
-  }
-  for (const node of legacy.nodes) objects.set(location(node), node);
-  const base = new Set<string>();
-  for (const template of manifest.templates.filter(file => file.path.startsWith('templates/root/'))) {
-    let path = template.path.slice('templates/root/'.length); base.add(path);
-    while (path.includes('/')) { path = path.slice(0, path.lastIndexOf('/')); base.add(path); }
-  }
-  base.add('.svaib/space.json');
-  const root: TreeItem = { id: 'root', parentId: null, name: 'scaffold', type: 'folder', note: 'корень клиентского scaffold', role: 'root', locked: true, fixedName: false, placeholder: false, proposed: false, acceptsBlocks: false, projectContainer: false, clientContainer: false, template: null, viewKind: null };
+const NOTES: Record<string, string> = {
+  '00_компания': 'обязательный объект: компания как целое', 'README.md': 'файл навигации', 'AGENTS.md': 'рабочая инструкция AI-агента',
+  'CLAUDE.md': 'подключение инструкции для Claude Code', '_вводная.md': 'что это, кто отвечает, куда идёт',
+  'видение.md': 'кто мы и зачем: миссия, образ будущего, ценности', 'цели.md': 'куда идём и к какому сроку',
+  'оргструктура.md': 'кто за что отвечает и кто кому подчиняется', 'ключевые-показатели.md': 'ключевые показатели бизнеса',
+  '_входящее': 'неразобранное', '_архив': 'то, что уже не действует', '.svaib': 'служебная папка помощника',
+  '00_стратегия': 'курс компании', '00_команда': 'команда уровня компании', '00_показатели': 'ключевые показатели компании',
+  'findings.md': 'находки о расхождениях с каноном', 'usage': 'учёт использования скиллов; ведёт плагин',
+  'space.json': 'версия и след поставки; заполняет space-scaffold',
+};
+function role(path: string, name: string): TreeItem['role'] {
+  if (path === '00_компания') return 'unit';
+  if (/^00_/.test(name)) return 'aspect';
+  if (/^_(вводная|делаем|планы|хроника|решения)\.md$/.test(name)) return 'kit';
+  if (/^(_входящее|_архив|_встречи|_личное|\.svaib|usage|источники|extractors)$/.test(name)) return 'infrastructure';
+  return 'root';
+}
+
+// Стартовое дерево нового пространства: шаблоны `templates/root/`; шаблон назван так же, как файл в пространстве.
+export function initialTreeConfig(companyName: string): TreeConfig {
+  const root: TreeItem = { id: 'root', parentId: null, name: 'пространство', type: 'folder', note: 'корень пространства компании', role: 'root', locked: true,
+    fixedName: false, placeholder: false, proposed: false, acceptsBlocks: false, projectContainer: false, clientContainer: false, template: null, viewKind: null };
   const entries = new Map<string, TreeItem>([['', root]]);
-  function add(path: string, folder: boolean, template: string | null, note = ''): TreeItem {
+  function add(path: string, folder: boolean, template: string | null): TreeItem {
     const existing = entries.get(path); if (existing) return existing;
     const parts = path.split('/'); const name = parts.pop()!; const parent = add(parts.join('/'), true, null);
-    const object = objects.get(path);
-    const person = object?.kind === 'employee';
-    const role = person ? 'workspace' : object || path === '01_company' ? 'unit' : /^(01_strategic|02_team|03_metrics|projects|processes|knowledge)$/.test(name) ? 'aspect' : /^0[1-5]_(overview|active|backlog|progress|decisions)\.md$/.test(name) ? 'kit' : /^(_inbox|zz_archive|meetings|_private|\.svaib|usage|source|extractors)$/.test(name) ? 'infrastructure' : /^(docs|contracts|drafts)$/.test(name) ? 'workspace' : 'root';
-    const item: TreeItem = { id: path === '01_company' ? 'company' : 'item-' + entries.size, parentId: parent.id, name, type: folder ? 'folder' : 'file', note: object?.name ?? note,
-      role, locked: base.has(path), fixedName: false, placeholder: false, proposed: false,
-      acceptsBlocks: folder && !person && (Boolean(object) || path === '01_company'), projectContainer: folder && name === 'projects', clientContainer: object?.kind === 'clients', template, viewKind: object?.kind ?? null };
+    const company = path === '00_компания';
+    const item: TreeItem = { id: company ? 'company' : 'item-' + entries.size, parentId: parent.id, name, type: folder ? 'folder' : 'file',
+      note: NOTES[name] ?? '', role: role(path, name), locked: true, fixedName: false, placeholder: false, proposed: false,
+      acceptsBlocks: company, projectContainer: false, clientContainer: false, template, viewKind: company ? 'unit' : null };
     entries.set(path, item); return item;
   }
-  const notes: Record<string, string> = { '01_company': 'обязательный unit: компания как целое', 'README.md': 'карта папки', 'AGENTS.md': 'рабочая инструкция AI-агента', 'CLAUDE.md': 'подключение инструкции', 'operating-model.md': 'система управления; читать первой', 'vision.md': 'идентичность и видение', 'goal.md': 'цель и план', 'strategy.md': 'действующие стратегические выборы', '01_org-structure.md': 'карта ролей и подчинения', 'business-metrics.md': 'базовые бизнес-метрики', '_inbox': 'входящее', 'zz_archive': 'архив', '.svaib': 'служебное агента', '01_strategic': 'курс компании', '02_team': 'команда', '03_metrics': 'метрики' };
-  for (const dir of plan.directories ?? []) add(dir.path, true, null, notes[dir.path.split('/').at(-1)!] ?? '');
-  for (const file of plan.files) add(file.path, false, file.template, notes[file.path.split('/').at(-1)!] ?? '');
-  return { schemaVersion: 2, catalogVersion: config.catalogVersion, canonSnapshot: config.canonSnapshot, companyName: config.companyName, tree: [...entries.values()] };
+  for (const template of manifest.templates.filter(file => file.path.startsWith('templates/root/'))) {
+    add(template.path.slice('templates/root/'.length), false, template.path);  // путь шаблона и есть путь в пространстве
+  }
+  add('.svaib/space.json', false, null);
+  return { schemaVersion: 2, catalogVersion: manifest.version, canonSnapshot: manifest.canonSnapshot, companyName, tree: [...entries.values()] };
 }

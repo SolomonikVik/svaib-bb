@@ -335,7 +335,7 @@ export default function MetricsDashboardPanel({ data, onRefresh, refreshUnavaila
   if (!selected) return null;
   return <section className={`svb-metrics-dashboard${embedded ? ' is-embedded' : ''}`} aria-label={data.title}>
     <header className="svb-md-heading"><div className="svb-md-subject"><Heading>{data.title}</Heading><p className="svb-md-intro">{data.description}</p></div><div className="svb-md-heading-actions">
-      {actions}{onRefresh && <button type="button" className="svb-md-primary" onClick={onRefresh} disabled={!!refreshUnavailable} title={refreshUnavailable || 'Партнёр перечитает источники и обновит графики этой вкладки'}>Обновить данные</button>}
+      {actions}{onRefresh && <button type="button" className="svb-md-primary" onClick={onRefresh} disabled={!!refreshUnavailable} title={refreshUnavailable || 'Агент перечитает источники и обновит графики этой вкладки'}>Обновить данные</button>}
       <details className="svb-md-sources-panel"><summary>Источники и покрытие</summary><div className="svb-md-sources-content">
         <p>Снимок подготовлен {readLabel(data.preparedAt)}. Даты проверки источников указаны отдельно.</p>
         {data.metrics.map(metric => <section key={metric.id}><h3>{metric.label}</h3><p>{metric.description}</p>{metric.source.url ? <a href={metric.source.url} target="_blank" rel="noreferrer">Открыть «{metric.source.title}» ↗</a> : <span>{metric.source.title}</span>}<p>Прочитано {readLabel(metric.source.verifiedAt)}</p>

@@ -30,6 +30,11 @@ function readmePurposes(text: string, readme: string): Record<string, ScaffoldRo
   }
   return result;
 }
+export function assertImportRoot(path: string, platform = process.platform) {
+  const segments = platform === 'win32' ? path.toLowerCase().split(/[\\/]/) : path.split('/');
+  if (segments.some(segment => segment === '_личное' || segment === '_private'))
+    fail('invalid_root', 'Личная папка не может быть источником обзора.');
+}
 async function openRoot(path: string): Promise<FileHandle> {
   let handle = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
@@ -47,6 +52,7 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
   signal?.throwIfAborted();
   if (process.platform !== 'linux') fail('importer_unavailable', 'Для безопасного чтения каркаса нужен поддерживаемый локальный файловый адаптер.');
   if (!isAbsolute(pinnedRoot) || resolve(pinnedRoot) !== pinnedRoot) fail('invalid_root', 'Нужен фактический корень из native-привязки.');
+  assertImportRoot(pinnedRoot);
   let root: FileHandle;
   try {
     if (await realpath(pinnedRoot) !== pinnedRoot) fail('invalid_root', 'Корень изменился; повторите проверку рабочего места.');
@@ -81,7 +87,7 @@ async function readSnapshot(pinnedRoot: string, limits: ScaffoldImportLimits, si
         if (entries.length > limits.maxEntries) fail('too_large', 'Каркас содержит слишком много элементов для одного View.');
         if (entry.opaqueReason) continue;
         if (kind === 'directory') {
-          const collection = allowDepthBoundary && ['meetings', 'zz_archive'].includes(name);
+          const collection = allowDepthBoundary && ['_встречи', '_архив', '_meetings', 'meetings', 'zz_archive'].includes(name);
           if (!collection && depth >= limits.maxDepth && (depth >= scaffoldImportLimits.maxDepth || !expandedPaths.some(expanded => expanded === path || expanded.startsWith(path + '/')))) {
             if (!allowDepthBoundary) fail('too_large', 'Каркас слишком глубоко вложен для одного View.');
             entry.opaqueReason = 'depth_limit';

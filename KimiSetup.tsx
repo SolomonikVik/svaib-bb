@@ -153,7 +153,7 @@ export function KimiSetup({ settings = false, cabinetVisible, onVisibilityChange
       }}>Выбрать резервную установку</button>
     </details>}
     {view.stage === 'blocked' && <button className="svb-text-button" disabled={pending} onClick={open}>Повторить проверку</button>}
-    {view.stage === 'complete' && <><p>Ответ модели проверен. Можно продолжать работу с партнёром svaib.</p>
+    {view.stage === 'complete' && <><p>Ответ модели проверен. Можно продолжать работу с агентом svaib.</p>
       <button className="svb-text-button" disabled={pending} onClick={() => { void act(() => rpc.call('kimiRecheck', null)); }}>Проверить ещё раз</button></>}
     {(view.message || error) && <p role="status" className="svb-kimi-note">{error || view.message}</p>}
     {view.stage !== 'complete' && <div className="svb-kimi-footer">

@@ -173,7 +173,7 @@ export function MetricsView({ workspaceId, accountId }: { workspaceId: string; a
         </>} /> : binding.publications?.length ? <div className="svb-metrics-publications"><p>Выбери общую публикацию показателей.</p>
         {binding.publications.map(item => <button type="button" key={item.id} onClick={() => void selectPublication(item.id)}><strong>{item.title}</strong><span>{item.purpose} · {item.coverage}{item.ready === false ? ' · Показатели готовятся' : ''}</span></button>)}</div>
         : binding.complete === false ? <p role="status">Список публикаций пока неполон. Повтори проверку перед подготовкой.</p>
-        : <p>Показатели ещё не подготовлены. Партнёр прочитает источники и соберёт графики для этой страницы.</p>}
+        : <p>Показатели ещё не подготовлены. Агент прочитает источники и соберёт графики для этой страницы.</p>}
       {!blocked && binding !== null && !viewId && !error && binding.complete !== false && !binding.publications?.length && <div className="svb-metrics-view-actions"><button type="button" onClick={() => void start(null)}>Подготовить показатели</button></div>}
     </>}
   </section>;

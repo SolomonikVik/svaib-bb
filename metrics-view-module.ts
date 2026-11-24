@@ -253,7 +253,7 @@ export function registerMetricsViewModule(bb: BbPluginApi, options: {
     'metricsView.release': input => respond(async () => {
       const signal = active(), page = await resolve(input, signal);
       if (await pinFor(page) !== input.viewId) throw new ViewTransportError('view_binding_required');
-      const result = refreshResult.parse(await remote(input, page, 'view_metrics_refresh', { id: input.viewId, requestId: input.requestId, leaseId: input.leaseId, action: 'fail', error: 'Не удалось запустить партнёра для обновления данных.' }, signal));
+      const result = refreshResult.parse(await remote(input, page, 'view_metrics_refresh', { id: input.viewId, requestId: input.requestId, leaseId: input.leaseId, action: 'fail', error: 'Не удалось запустить агента для обновления данных.' }, signal));
       if (result.id !== input.viewId) throw new ViewTransportError('invalid_response');
       return { released: true as const };
     }),

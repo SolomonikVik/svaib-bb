@@ -314,7 +314,8 @@ async function prepare(root: string, signal: AbortSignal, options: RuntimePrepar
       const quoted = (platform === 'win32' ? view.python.replaceAll('\\', '/') : view.python).replaceAll("'", "'\\''");
       await writeFile(join(bin, 'python3'), `#!/bin/sh\nexec '${quoted}' "$@"\n`, { mode: 0o700 });
       await chmod(join(bin, 'python3'), 0o700);
-      if (platform === 'win32') await writeFile(join(bin, 'python3.cmd'), '@"%SVAIB_PYTHON%" %*\r\n');
+      // Windowless native hooks do not inherit the interactive console's UTF-8 code page.
+      if (platform === 'win32') await writeFile(join(bin, 'python3.cmd'), '@chcp 65001 >nul\r\n@setlocal DisableDelayedExpansion\r\n@"' + view.python.replaceAll('%', '%%') + '" %*\r\n');
       // Include known installation directories even before the parent BB gets a new PATH.
       view.path = platform === 'win32' ? [bin, win32.dirname(view.python), ...(view.git ? [win32.dirname(view.git)] : []), ...(view.bash ? [win32.dirname(view.bash)] : []),
         ...(view.node ? [win32.dirname(view.node)] : []), variable(env, 'PATH') ?? ''].join(';')
@@ -322,7 +323,13 @@ async function prepare(root: string, signal: AbortSignal, options: RuntimePrepar
     }
     view = await inspectRuntime(root, options.context ?? null, signal, { ...options, env: { ...env, ...(view.python ? { SVAIB_PYTHON: view.python } : {}), ...(view.path ? { PATH: view.path } : {}) } });
     // A successful operation replaces only its history; no failure is a lasting gate.
-    delete view.operationError; await save(); return view;
+    delete view.operationError; await save();
+    if (view.status === 'ready') {
+      const temporary = join(root, 'environment-' + process.pid + '.tmp');
+      await writeFile(temporary, JSON.stringify(runtimeEnvironment(view)), { mode: 0o600 });
+      await rename(temporary, join(root, 'environment.json'));
+    }
+    return view;
   } catch (error) {
     retainLock ||= (error as { cleanupPending?: boolean }).cleanupPending === true;
     view = { ...view, platform, status: 'failed', message: signal.aborted ? 'Подготовка отменена. Повтор запускается кнопкой «Подготовить» или CLI prepare --retry.'

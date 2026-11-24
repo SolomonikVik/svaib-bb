@@ -10,8 +10,7 @@ dialog. They do not need Git or an npm account for this installation.
 New plugin releases from `0.5.8` must admit the latest stable patch of the current
 BB Desktop minor line and two previous lines, starting at the adopted baseline
 `0.48.1`. `bb-compatibility.json` defines this transition. Historical plugin tags
-are not retroactively evaluated or changed. The rule concerns the BB application,
-not the independent versions of this plugin and its bundled Harness.
+are not retroactively evaluated or changed. The rule applies to the BB application. The BB plugin and Harness have independent releases.
 
 Before building, `scripts/check-bb-compatibility.mjs` resolves official GitHub
 release tags and their Plugin SDK versions, and rejects `engines.bb` or
@@ -39,8 +38,8 @@ node scripts/check-bb-compatibility.mjs \
 The tag must match `package.json`. It installs locked production dependencies
 with lifecycle scripts disabled, builds with pinned `bb-app@0.48.1`, packs the
 plugin, then installs the tarball with `git` disabled. Checks cover all three
-BB bundles and their metadata, the bundled local Screen dependency, and native
-Harness preparation for both Codex and Claude Code. Consumer checks use Node
+BB bundles and their metadata, the bundled local View dependency, and the
+absence of the old Harness payload and installer. Consumer checks use Node
 22.23.4 (also pinned by the Kimi runtime helper), import the server bundle and
 check host syntax. The installed package is rejected if it contains esbuild,
 native add-ons, platform executables, or root installation/build hooks.

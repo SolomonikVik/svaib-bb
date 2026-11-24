@@ -4,6 +4,9 @@ import { runtimeContextSchema, runtimeViewSchema } from './runtime-contract';
 
 const selection = z.object({ hostId: z.string().min(1), context: runtimeContextSchema }).strict();
 export const runtimeSettingsContract = defineRpcContract({
+  computerStatus: { input: z.object({ threadId: z.string().nullable() }).strict(), output: runtimeViewSchema },
+  computerPrepare: { input: z.object({ threadId: z.string().nullable() }).strict(), output: runtimeViewSchema },
+  computerCancel: { input: z.null(), output: runtimeViewSchema },
   runtimeHosts: { input: z.null(), output: z.object({ primaryHostId: z.string().nullable(),
     hosts: z.array(z.object({ id: z.string(), name: z.string() }).strict()) }).strict() },
   runtimeStatus: { input: selection, output: runtimeViewSchema },

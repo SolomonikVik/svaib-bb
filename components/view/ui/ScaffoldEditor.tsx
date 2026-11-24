@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { Block, View } from '../src/model';
 import type { ViewTransport } from './ViewRenderer';
 import { treeConfigSchema, scaffoldVisibilityPolicy, type TreeConfig } from '../src/scaffold-tree-model';
-import { toTreeConfig } from './scaffold-tree';
 import manifest from '../src/scaffold-catalog.json';
 import source from './scaffold-source.json';
 import './scaffold-site.css';
@@ -46,8 +45,8 @@ export function ScaffoldEditor(props: Props) {
   if (props.view.revision > server.current.revision) server.current = props.view;
   const saved = props.view.canEdit === true && props.cacheKey ? drafts.get(props.cacheKey) : undefined;
   const owner = useRef(Symbol('view-draft'));
-  const draft = useRef<TreeConfig>(saved?.draft ?? toTreeConfig(props.block.config));
-  const base = useRef(saved?.base ?? JSON.stringify(toTreeConfig(props.block.config)));
+  const draft = useRef<TreeConfig>(saved?.draft ?? props.block.config);
+  const base = useRef(saved?.base ?? JSON.stringify(props.block.config));
   const revision = useRef(saved?.revision ?? props.view.revision);
   const ui = useRef<UiState | undefined>(saved?.ui);
   const busy = useRef(false);
@@ -59,10 +58,10 @@ export function ScaffoldEditor(props: Props) {
   function initializeFrame(config: TreeConfig) { post({ type: 'view-init', config, ui: ui.current, readOnly: latest.current.view.canEdit !== true, expandable: Boolean(latest.current.transport.expandScaffold) }); }
   useEffect(() => { if (props.cacheKey) { draftOwners.set(props.cacheKey, owner.current); remember(); } }, [props.cacheKey]);
   useEffect(() => {
-    const incoming = toTreeConfig(props.block.config);
+    const incoming = props.block.config;
     const clean = JSON.stringify(draft.current) === base.current;
     if (props.view.canEdit !== true || clean || JSON.stringify(draft.current) === JSON.stringify(incoming)) {
-      const changed = base.current !== JSON.stringify(incoming);
+      const changed = JSON.stringify(draft.current) !== JSON.stringify(incoming);
       draft.current = incoming; base.current = JSON.stringify(incoming); revision.current = props.view.revision;
       remember();
       if (ready.current && (changed || props.view.canEdit !== true)) initializeFrame(incoming);
@@ -125,7 +124,7 @@ export function ScaffoldEditor(props: Props) {
         const block = result.view.document.blocks.find(item => item.id === current.block.id);
         if (block?.type !== 'scaffold') throw new Error('Ветка недоступна.');
         server.current = result.view; revision.current = result.view.revision;
-        draft.current = toTreeConfig(block.config); base.current = JSON.stringify(draft.current); remember();
+        draft.current = block.config; base.current = JSON.stringify(draft.current); remember();
         current.receive(result.view); initializeFrame(draft.current);
         post({type:'view-status',message:''});
       } catch (cause) {
@@ -179,7 +178,7 @@ export function ScaffoldEditor(props: Props) {
   }, []);
   function acceptServerVersion() {
     const current = latest.current;
-    const incoming = toTreeConfig(current.block.config);
+    const incoming = current.block.config;
     draft.current = incoming; base.current = JSON.stringify(incoming); revision.current = current.view.revision;
     remember(); setConflict(false); initializeFrame(incoming);
   }

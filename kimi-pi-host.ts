@@ -34,7 +34,7 @@ const noLog: KimiDiagnosticLog = () => {};
 // The portable Node is immutable. Avoid rereading its large binary on each UI poll;
 // any metadata change causes a fresh digest before trusting the owned registration.
 const nodeDigests = new Map<string, { signature: string; hash: string }>();
-const changed = () => new Error('Профиль Pi изменён. Существующие файлы сохранены; нужна помощь партнёра.');
+const changed = () => new Error('Профиль Pi изменён. Существующие файлы сохранены; нужна помощь агента.');
 const ownerPath = (root: string) => join(root, 'setup-owner.json');
 const agentDir = (root: string) => join(root, 'agent');
 export const kimiPiCli = (root: string) => join(root, ...packageParts, 'dist', 'bundle', 'cli.js');
@@ -58,10 +58,11 @@ const json = (value: unknown) => JSON.stringify(value, null, 2) + '\n';
 const registration = (root: string, owner: Owner): KimiPiRegistration => ({
   command: owner.nodeExecutable, args: [join(root, 'launch.mjs'), owner.generation], agentDir: agentDir(root),
 });
-function launcher(root: string, executable: string) {
+function launcher(root: string, executable: string, standalone = true) {
   const cli = kimiPiCli(root);
   return `// Owned Kimi/Pi launcher. The first argument is BB's stable profile generation.\n` +
     `import { dirname, delimiter } from 'node:path';\nimport { pathToFileURL } from 'node:url';\n` +
+    (standalone ? `import { readFileSync } from 'node:fs';\ntry { const env = JSON.parse(readFileSync(${JSON.stringify(join(root, '..', 'runtime-preparation', 'environment.json'))}, 'utf8')); for (const name of ['SVAIB_PYTHON', 'PATH']) if (typeof env[name] === 'string') process.env[name] = env[name]; } catch {}\n` : '') +
     `const cli = ${JSON.stringify(cli)};\n` +
     `process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(agentDir(root))};\n` +
     `const names = Object.keys(process.env).filter(name => process.platform === 'win32' ? name.toLowerCase() === 'path' : name === 'PATH');\n` +
@@ -112,7 +113,7 @@ async function readOwner(root: string): Promise<Owner | null> {
   return parsed.data;
 }
 async function validate(root: string, owner: Owner) {
-  if (owner.launcherHash !== digest(launcher(root, owner.nodeExecutable))) throw changed();
+  if (![true, false].some(standalone => owner.launcherHash === digest(launcher(root, owner.nodeExecutable, standalone)))) throw changed();
   let complete = true;
   if (!await regular(owner.nodeExecutable, false, 256 * 1024 * 1024) || await nodeHash(owner.nodeExecutable) !== owner.nodeHash) complete = false;
   if (await regular(agentDir(root), true)) {
@@ -137,6 +138,30 @@ async function validate(root: string, owner: Owner) {
     runtimeComplete = cliHash === owner.runtime.cliHash && packageHash === owner.runtime.packageHash;
   }
   return { complete: complete && runtimeComplete && !needsKey && !owner.pendingAuthHash, needsKey, pendingCommitted, runtimeComplete };
+}
+
+export async function validateManagedKimiPi(root: string, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const owner = await readOwner(root);
+  if (!owner || !(await validate(root, owner)).complete) throw changed();
+  return owner.nodeExecutable;
+}
+
+/** The unpublished copy is rebased only after every owned byte still matches the source. */
+export async function rebaseManagedKimiPi(source: string, target: string, executable: string, signal: AbortSignal) {
+  const release = await profileLock(source);
+  try {
+    const owner = await readOwner(source), copied = await readOwner(target);
+    if (!owner || JSON.stringify(owner) !== JSON.stringify(copied) || !(await validate(source, owner)).complete) throw changed();
+    for (const name of ['launch.mjs', 'agent/models.json', 'agent/auth.json'])
+      if (await fileHash(join(source, name)) !== await fileHash(join(target, name))) throw changed();
+    signal.throwIfAborted();
+    owner.nodeExecutable = executable; owner.nodeHash = await nodeHash(executable);
+    owner.launcherHash = digest(launcher(target, executable));
+    await privateWrite(join(target, 'launch.mjs'), launcher(target, executable));
+    await privateWrite(ownerPath(target), json(owner));
+    if (!(await validate(target, owner)).complete) throw changed();
+  } finally { await release(); }
 }
 
 export async function inspectKimiPi(root: string, signal: AbortSignal, options: Pick<Options, 'externalAgentDir' | 'externalEnvNames'> = {}): Promise<KimiPiStatus> {

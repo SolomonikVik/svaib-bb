@@ -5,8 +5,8 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import type { PluginBbSdk, PluginKvStorage } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import type { CatalogWorkspace, WorkplaceConfig } from './config';
-import type { AccountView } from './experiments/account-prototype/contracts';
-import { validatePersistentFolder } from './experiments/account-prototype/folder-selection';
+import type { AccountView } from './account/contracts';
+import { validatePersistentFolder } from './account/folder-selection';
 import { readViewCompanyBinding, type PersistentRootValidator, type VerifiedViewCompany } from './view-native-context';
 
 export const companySelector = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
@@ -16,7 +16,7 @@ export const companyRowSchema = z.object({ companyId: companySelector, name: z.s
 }).strict();
 export const companyDirectorySchema = z.object({ accountId: z.string().nullable(), companies: z.array(companyRowSchema) }).strict();
 export type CompanyDirectory = z.infer<typeof companyDirectorySchema>;
-export const targetSchema = z.object({ environmentId: z.string(), projectName: z.string(), path: z.string() }).strict();
+export const targetSchema = z.object({ environmentId: z.string(), projectId: z.string(), projectName: z.string(), path: z.string() }).strict();
 export type CompanyTarget = z.infer<typeof targetSchema>;
 export const companyWorkspaceRpc = {
   companyDirectory: { input: z.null(), output: companyDirectorySchema },
@@ -104,17 +104,23 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
     const prepared = candidates.length === 1 ? candidates[0] : undefined;
     const sources: CatalogWorkspace['sources'] = [];
     // Bounded canonical entry points only. Their contents are read on explicit document/action selection.
-    for (const [id, title, path] of [['overview', 'Обзор компании', '01_company/01_overview.md'],
-      ['goal', 'Цель компании', '01_company/01_strategic/goal.md'], ['active', 'Текущая работа', '01_company/02_active.md'],
-      ['decisions', 'Решения компании', '01_company/05_decisions.md'], ['map', 'Карта пространства', 'README.md']]) {
-      try { if ((await lstat(join(root, path))).isFile() && await realpath(join(root, path)) === join(root, path)) sources.push({ id, title, path: join(root, path) }); }
-      catch { /* Missing source is an empty state, not an invented document. */ }
+    // Scaffold 5.0.0 names first; pre-5.0 names until live spaces migrate. First existing path wins.
+    for (const [id, title, paths] of [['overview', 'Обзор компании', ['00_компания/_вводная.md', '01_company/01_overview.md']],
+      ['goal', 'Цель компании', ['00_компания/00_стратегия/цели.md', '00_компания/цели.md', '01_company/01_strategic/goal.md']],
+      ['active', 'Текущая работа', ['00_компания/_делаем.md', '01_company/02_active.md']],
+      ['decisions', 'Решения компании', ['00_компания/_решения.md', '01_company/05_decisions.md']],
+      ['map', 'Карта пространства', ['README.md']]] as const) {
+      for (const path of paths) {
+        try {
+          if ((await lstat(join(root, path))).isFile() && await realpath(join(root, path)) === join(root, path)) { sources.push({ id, title, path: join(root, path) }); break; }
+        } catch { /* Missing source is an empty state, not an invented document. */ }
+      }
     }
     unchanged(verified.member.epoch);
     const workspace: CatalogWorkspace = { ...(prepared ?? {
-      eyebrow: 'Рабочее место компании', description: 'Материалы компании и работа с партнёром.',
-      goalLabel: 'Куда идём', goal: 'Сводка ещё не подготовлена. Начни с материалов компании или вопроса партнёру.',
-      snapshotAt: '', sources, signals: [], actions: [{ id: 'partner', title: 'Обсудить с партнёром',
+      eyebrow: 'Рабочее место компании', description: 'Материалы компании и работа с агентом.',
+      goalLabel: 'Куда идём', goal: 'Сводка ещё не подготовлена. Начни с материалов компании или вопроса агенту.',
+      snapshotAt: '', sources, signals: [], actions: [{ id: 'partner', title: 'Обсудить с агентом',
         description: 'Задать вопрос по материалам компании.', icon: 'MessageSquare', prompt: 'Помоги разобраться с моим вопросом по компании.',
         method: 'Начни с инструкций и карты выбранного пространства. Поднимай только нужные материалы.', sourceIds: [] }],
     }), ...(prepared ? { metricsUpdateWorkspaceId: prepared.id } : {}), id: companyWorkspaceId(companyId), name, companyId, root, projectId: project.id, environmentId: environment.id, hostId: environment.hostId };
@@ -163,7 +169,7 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
       const environments = await sdk.environments.list({ hostId, status: 'ready', limit: 100, offset });
       for (const env of environments) {
         if (env.workspaceProvisionType !== 'unmanaged') continue;
-        try { const target = await checked(companyId, env.id); result.push({ environmentId: env.id, projectName: target.project.name, path: target.root }); }
+        try { const target = await checked(companyId, env.id); result.push({ environmentId: env.id, projectId: target.project.id, projectName: target.project.name, path: target.root }); }
         catch { /* An unrelated or invalid environment is not offered for this company. */ }
       }
       if (environments.length < 100) break;
@@ -207,6 +213,15 @@ export function createCompanyWorkspaces(options: { sdk: PluginBbSdk; kv: PluginK
   }
   async function directory(): Promise<CompanyDirectory> { const { accountId, companies } = await catalog(); return { accountId, companies }; }
   return { catalog, directory, targets, claimedLegacyIds, claimedScopes,
+    journeyFolder: async (accountId: string, companyId: string, currentEnvironmentId?: string) => {
+      try {
+        const saved = (await preferences(accountId))[companyId];
+        const environmentId = saved?.environmentId ?? currentEnvironmentId;
+        if (!environmentId) return;
+        const { environment, member } = await checked(companyId, environmentId, saved);
+        if (member.account_id === accountId) return { projectId: environment.projectId, environmentId: environment.id };
+      } catch { /* A missing or stale binding leaves the choice to the composer. */ }
+    },
     threadWorkspace: async (workspaceId: string, environmentId: string) => {
       const p = await principal();
       const c = p.companies.find(c => companyWorkspaceId(c.company_id) === workspaceId);

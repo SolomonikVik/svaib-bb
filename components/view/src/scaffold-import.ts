@@ -54,7 +54,8 @@ export function snapshotEntryBoundary(path: string, kind: SnapshotKind): string 
   if (kind === 'symlink') return 'symlink';
   if (kind === 'other') return 'special';
   if (!validName(name)) return 'unsupported_name';
-  if (name === '_private') return 'private';
+  // Личное закрыто под обоими именами — до любого чтения содержимого.
+  if (name === '_личное' || name === '_private') return 'private';
   if (technicalScaffoldPath(path)) return /^\.env(?:\.|$)/i.test(name) || (kind === 'file' && /^\.svaib\//.test(path)) ? 'sensitive' : 'excluded';
   if (/^\.env(?:\.|$)/i.test(name) || (kind === 'file' && /^\.svaib\//.test(path))) return 'sensitive';
   return null;
@@ -70,20 +71,23 @@ const itemId = (path: string) => 'import-' + sha(path).slice(0, 24);
 // Business units and nonstandard aspects still require evidence from their README.
 function canonicalRole(path: string, kind: SnapshotKind): ScaffoldRoleEvidence | undefined {
   const name = path.split('/').at(-1)!;
-  if (kind === 'directory' && ['_inbox', '_private', 'meetings', 'zz_archive', '.svaib'].includes(name))
+  // Каркас 5.0.0 и прежние имена: пространство показываем таким, какое оно на диске.
+  if (kind === 'directory' && ['_входящее', '_личное', '_встречи', '_архив', '_inbox', '_private', '_meetings', 'meetings', 'zz_archive', '.svaib'].includes(name))
     return { role: 'infrastructure', source: 'Канон служебных папок scaffold.' };
   if (kind === 'file' && name === 'README.md')
     return { role: 'infrastructure', source: 'Карта папки по канону README.' };
   if (kind === 'file' && ['AGENTS.md', 'CLAUDE.md'].includes(name))
     return { role: 'infrastructure', source: 'Правила работы агента в пространстве.' };
-  if (kind === 'file' && /(^|\/)02_team\/[^/]+\/01_profile\.md$/.test(path))
+  if (kind === 'file' && /(^|\/)(00_команда\/[^/]+\/профиль|00_team\/[^/]+\/profile|02_team\/[^/]+\/01_profile)\.md$/.test(path))
     return { role: 'workspace', source: 'Профиль сотрудника: отдельный документ, не элемент management kit.' };
-  if (/^0[1-5]_(overview|active|backlog|progress|decisions)(\.md)?$/.test(name)) {
-    const names = ['01_overview', '02_active', '03_backlog', '04_progress', '05_decisions'];
+  if (/^(_|0[1-5]_)(вводная|делаем|планы|хроника|решения|overview|active|backlog|progress|decisions)(\.md)?$/.test(name)) {
+    const names = ['_вводная', '_делаем', '_планы', '_хроника', '_решения', '_overview', '_active', '_backlog', '_progress', '_decisions', '01_overview', '02_active', '03_backlog', '04_progress', '05_decisions'];
     if (names.includes(name.replace(/\.md$/, '')))
       return { role: 'kit', source: 'Канон management kit: миссия сохраняется в форме файла и папки.' };
   }
-  if (path === '01_company' && kind === 'directory') return { role: 'unit', source: 'Компания: обязательный узел пространства.' };
+  if (kind === 'directory' && /^00_(стратегия|команда|показатели|финансы|проекты|процессы|strategic|team|metrics|finance|projects|processes)$/.test(name))
+    return { role: 'aspect', source: 'Канон ракурсов: знак 00_.' };
+  if (['00_компания', '00_company', '01_company'].includes(path) && kind === 'directory') return { role: 'unit', source: 'Компания: обязательный узел пространства.' };
   return undefined;
 }
 function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Record<string, ScaffoldRoleEvidence>): ScaffoldTreeConfig {
@@ -98,7 +102,7 @@ function configFrom(snapshot: ScaffoldSnapshot, companyName: string, roles: Reco
     if (!visible.has(parent) || !validName(name) || !['file', 'directory'].includes(entry.kind)) continue;
     const folder = entry.kind === 'directory';
     const evidence = canonicalRole(entry.path, entry.kind) ?? (Object.hasOwn(roles, entry.path) ? roles[entry.path] : undefined);
-    const role = evidence?.role ?? (folder && entry.path === '01_company' ? 'unit' : 'root');
+    const role = evidence?.role ?? (folder && ['00_company', '01_company'].includes(entry.path) ? 'unit' : 'root');
     const unit = folder && role === 'unit';
     const locked = entry.opaqueReason !== null || protectedParents.has(parent) || (folder && hiddenParents.has(entry.path));
     const collection = entry.opaqueReason?.match(/^collection:(\d+):(\d+)$/);

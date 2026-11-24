@@ -1,135 +1,139 @@
 {
   "schemaVersion": 1,
-  "version": "4.4.0",
-  "canonSnapshot": "11e0b08a3c09",
+  "version": "5.0.0",
+  "canonSnapshot": "510c12f34d6c",
   "templates": [
     {
-      "path": "templates/aspects/01_strategic/goal.md",
-      "sha256": "fa8d542dff6016a0468b8a9f0bc9d994a9d55eec565c68572396f10601a8e2a4"
+      "path": "templates/_встречи/README.md",
+      "sha256": "9647484b700b4fc9e4f95f3fe3d2a93383b0c6becf00b14f30e976d83562c4e9"
     },
     {
-      "path": "templates/aspects/01_strategic/strategy.md",
-      "sha256": "2ef4ec4cb8ed6fe864eebe809270d696bf18109680247f882ff2519410623f60"
+      "path": "templates/aspects/00_команда/имя-фамилия.md",
+      "sha256": "ed708f88f3f119957421bc8c416b3c9a9e77be53def4d293c5b872af2e29c045"
     },
     {
-      "path": "templates/aspects/01_strategic/vision.md",
-      "sha256": "0c3f61ebd2ee73aab8f7afa94e1c51f0c9881cb2db8d133fa5796fdf878cd0e5"
+      "path": "templates/aspects/00_команда/оргструктура.md",
+      "sha256": "f21a03c425d778e4b6232887584c8891f98a9c2181972992522d479f63440f30"
     },
     {
-      "path": "templates/aspects/02_team/01_org-structure.md",
-      "sha256": "66fd3df7ccfa54458fdd97fefdf40b6f9919c2694b610aeb42ccf7ace9e53f63"
+      "path": "templates/aspects/00_показатели/extractors/README.md",
+      "sha256": "d3a3e03d7afd769733f470c42cc1170288daf88383c3b3092ce1d70844d3543c"
     },
     {
-      "path": "templates/aspects/02_team/employee.md",
-      "sha256": "ae0596edf632bb395740d27ed950f951f42cc727626732d451f490609f43845a"
+      "path": "templates/aspects/00_показатели/README.md",
+      "sha256": "f1458bef2fcae85b925cabdb0d30a7237ded0587aa056372ba4a24f1c1159b74"
     },
     {
-      "path": "templates/aspects/03_metrics/domain-metrics.md",
-      "sha256": "e69cc4925153a523a7784c21f3ae35801bb147dfd95781197e815363c74678cb"
+      "path": "templates/aspects/00_показатели/источники/README.md",
+      "sha256": "1490253ea83f009903b6bb182d621a0df7ab95ceb1395f2ff8bd699895f0ef95"
     },
     {
-      "path": "templates/aspects/03_metrics/extractors/README.md",
-      "sha256": "67c28539ce0271cf171c406019190f6cec3efd2d29ba682bae26b155a1ee5209"
+      "path": "templates/aspects/00_показатели/показатели-направления.md",
+      "sha256": "042539ae4d73542a2584bbd0de237662cbe77cb3107c65c9b1e2a94991ee9d25"
     },
     {
-      "path": "templates/aspects/03_metrics/README.md",
-      "sha256": "09a5735250a3dd7d55b7a6bdf01c44fac40283bb0a301a8233f79febc40a0d16"
+      "path": "templates/aspects/00_проекты/README.md",
+      "sha256": "91f6c1e19224c9b2aaf8ef0620e40dc7d243a93ec922fb20bae971a08fc37e64"
     },
     {
-      "path": "templates/aspects/03_metrics/source/README.md",
-      "sha256": "d562c46ae0a982e027f76c26323c8a1b353cfe3731ead0aeb9f5b44e13115773"
+      "path": "templates/aspects/00_процессы/README.md",
+      "sha256": "18106d6d6424b584a1eff113d3b7da1e534d1cd2a50cb707c5afec05c13d683e"
     },
     {
-      "path": "templates/aspects/knowledge/README.md",
-      "sha256": "13f62741bbe9e977529313d53f5f979b8a160341dc7882200316a0391471f02a"
-    },
-    {
-      "path": "templates/aspects/processes/process.md",
+      "path": "templates/aspects/00_процессы/процесс.md",
       "sha256": "920939a9a40ea06118e398db09c8c9b899c87c5800b45a16ff0bdad1a3981034"
     },
     {
-      "path": "templates/aspects/processes/README.md",
-      "sha256": "b71a2b772ed556ef8bc780e866ae9006701472fdc63697a300dde07d68e945a3"
+      "path": "templates/aspects/00_стратегия/видение.md",
+      "sha256": "bdb7a2bb902ebf7d9ae6024a21d067406d5cc803af424ec781fcf6975b562486"
     },
     {
-      "path": "templates/aspects/projects/README.md",
-      "sha256": "6faf100b960edd69efbe133a8576d2fcb0953d7843dcd4129bdd4c0373429c6e"
+      "path": "templates/aspects/00_стратегия/стратегия.md",
+      "sha256": "3b706128a12ea6b5ce1c54fcda55fff735606509210f661331ee0089571b7335"
     },
     {
-      "path": "templates/infrastructure/_inbox/README.md",
-      "sha256": "2c726e4a190f1a08ed0c3791f93969f1a158d24bec4ce775a389986ea34c58a3"
+      "path": "templates/aspects/00_стратегия/цели.md",
+      "sha256": "a0c15223c8754b49b0d706e2b93b8c8c83004cbc1c57196af4837c2bbcb96d95"
+    },
+    {
+      "path": "templates/aspects/00_финансы/README.md",
+      "sha256": "df06edde09241c278999fdfd2857e8d482e0a135c6b55874548eb3c24bb73500"
+    },
+    {
+      "path": "templates/infrastructure/_архив/README.md",
+      "sha256": "1d4a5e62eee270bccf148434259d5ee25e5003346aa7752d0959d259c47cca12"
+    },
+    {
+      "path": "templates/infrastructure/_входящее/README.md",
+      "sha256": "03d2e02b6f87cd91227ab03a92259b821008c5aacba315e4d7eb88e31932ed3e"
     },
     {
       "path": "templates/infrastructure/README.md",
-      "sha256": "afdf4e69e6e95bef67630433431cfc17d82a974af0038d535d252f7a3a9570d7"
+      "sha256": "af2a223d1ce56cdaa945bfa2b707c128e3dd786fb8ca7106d558265af3b1fe17"
     },
     {
-      "path": "templates/infrastructure/zz_archive/README.md",
-      "sha256": "e0a668adea54c7deabf4625680806371b7c92a96f414ef4808d754b9967f5ff3"
+      "path": "templates/management-kit/_вводная.md",
+      "sha256": "1d1c2430c93f287781bbb38b6bd19cd5a71af0b08e21fc6cade87c1aad88181f"
     },
     {
-      "path": "templates/management-kit/01_overview.md",
-      "sha256": "af193e26c0c8f86464d3bab95f58663f90ce0cbcc641d958fd8a933295e79881"
-    },
-    {
-      "path": "templates/management-kit/02_active.md",
+      "path": "templates/management-kit/_делаем.md",
       "sha256": "bb8ee1f3065a842f5f0a5f0dd1bb0be744163536c1d663fd974cc8c5b9981f66"
     },
     {
-      "path": "templates/management-kit/03_backlog.md",
-      "sha256": "7b41f91b060ed6ba3c4da21b70160398f064acfafd7366c1501367800ec48661"
+      "path": "templates/management-kit/_планы.md",
+      "sha256": "47a0af07d5db684245708cec6752b1ae394db26ab828562c50fad664127efe87"
     },
     {
-      "path": "templates/management-kit/04_progress.md",
-      "sha256": "f1358ccfb07caa718ee3b76b29ec1e9baa96b0d74875b80c98306ffb3d9893ef"
-    },
-    {
-      "path": "templates/management-kit/05_decisions.md",
+      "path": "templates/management-kit/_решения.md",
       "sha256": "bd822c08222b1eb6c6c5e5faa929e50e5accdd5c6b10c6b0212da0231a1eb1ee"
     },
     {
-      "path": "templates/meetings/README.md",
-      "sha256": "15215aedf8afc65fb845d44817d1ea90e654b2f32b91a000cb2ea4ebfe3164cf"
-    },
-    {
-      "path": "templates/nodes/clients/client-name/company.md",
-      "sha256": "6aafee04444d0564888dedeb46f8cff0b0b4dcd346c837049d466c484fe81631"
-    },
-    {
-      "path": "templates/nodes/clients/client-name/people.md",
-      "sha256": "4dda7630e812724b32224f9d280b560431754469e6409866489b715b02445a62"
-    },
-    {
-      "path": "templates/nodes/clients/client-name/README.md",
-      "sha256": "ef072f8b2a90d2019c34e870089135dd74aafde08b786b611645f0287f219c42"
-    },
-    {
-      "path": "templates/nodes/clients/README.md",
-      "sha256": "92a20ee25f40ca549c9df652a2e371d73dc7a0fe4852aad2804863fd78173761"
+      "path": "templates/management-kit/_хроника.md",
+      "sha256": "9e93f62b491dffdd9ef00a437b3c784d13b03e6c04eeef9297e9ec3e986e027e"
     },
     {
       "path": "templates/nodes/employee/README.md",
-      "sha256": "dbc1830165ed6db620aa6007e9498c74e343bcc5122a9488f64d845fdb6b0a79"
-    },
-    {
-      "path": "templates/nodes/product/profile.md",
-      "sha256": "d8132da8460d157f8b0733fc85fbbde400c692196249855160ee92deef803613"
-    },
-    {
-      "path": "templates/nodes/product/README.md",
-      "sha256": "f732d4aeba6498296592bff59174694dc5c09ca9d605a8b2474e29f15e58834c"
+      "sha256": "7db5b218364b946a3736d577d0f4a0eeac0adfa9aa1b733c7fd1ffc6d249a8cb"
     },
     {
       "path": "templates/nodes/unit/README.md",
-      "sha256": "ae73e2e31cc0495bf613a320ed891a69b59be3595bab9e6790d6c24a3277e0c6"
+      "sha256": "91da8197da918d864d6b48753a8dfd8cd19365e019e9b0e30f7ca28ae0949af0"
+    },
+    {
+      "path": "templates/nodes/клиенты/client-name/README.md",
+      "sha256": "2730a651a906c9a4b5868fff47a4ce63e792e8fbd441222fd894e2a28e8c7736"
+    },
+    {
+      "path": "templates/nodes/клиенты/client-name/компания.md",
+      "sha256": "704950d805ea9c19586000c8861250a85596e2a0e7ee2bfcb8b926a8ea17a465"
+    },
+    {
+      "path": "templates/nodes/клиенты/client-name/люди.md",
+      "sha256": "4dda7630e812724b32224f9d280b560431754469e6409866489b715b02445a62"
+    },
+    {
+      "path": "templates/nodes/клиенты/README.md",
+      "sha256": "894e5c519db05f110761578c7cb90b262aaed54f9050b76f3cece7a44c1a92ff"
+    },
+    {
+      "path": "templates/nodes/продукт/README.md",
+      "sha256": "0f4c6286e84310efd7d90e47179adac2ade7ee8892532bf3ce1ac2086dd0d193"
+    },
+    {
+      "path": "templates/nodes/продукт/паспорт.md",
+      "sha256": "7ddaaf102214dd01abd1a2cdad8d22b98f03926ae1ca759953bcf806d6952041"
     },
     {
       "path": "templates/README.md",
-      "sha256": "ca00876a2067c20d942fcc2d45b71a63a0862fb0f87f9ab001a51b9c3398f916"
+      "sha256": "30a3d026246bdcf12a226c60e29c3463c506c26830463f5fd7285e27b8395226"
     },
     {
-      "path": "templates/root/_inbox/README.md",
-      "sha256": "6761b1523106b1cbe46b7c50c3d7e0933967d8c7f560c7c448905ed418b429af"
+      "path": "templates/root/_архив/README.md",
+      "sha256": "fdf3dc91d0d2f9748b4ef8339ea58f2334d8dc2e92b29b36565afb9a0955d673"
+    },
+    {
+      "path": "templates/root/_входящее/README.md",
+      "sha256": "0bcb95a1ce86eac39655cb90e5f93d530d7ab4de67e62c07f4cfc88fe6d421ec"
     },
     {
       "path": "templates/root/.svaib/findings.md",
@@ -137,51 +141,47 @@
     },
     {
       "path": "templates/root/.svaib/README.md",
-      "sha256": "c21a420eaf953840ddad9e5064b2a89d5f9aad9ee7581f6357b74779eef9edba"
+      "sha256": "a3bdd5ae44c7651b749bbf25d6238dd9b15b060e096e873fa3ce1a32cdd8cd56"
     },
     {
       "path": "templates/root/.svaib/usage/README.md",
       "sha256": "40a1fe7e34a1bbe99af5ec6f17fc6de2a08ca880b5211e10dd3e69d723db2807"
     },
     {
-      "path": "templates/root/01_company/_inbox/README.md",
-      "sha256": "6e26e7aa2f502db9cb6850e1269c160aa85594e6ea67971fc2471fcea8155d41"
+      "path": "templates/root/00_компания/_архив/README.md",
+      "sha256": "53179bdfda253ee2eaffeb61f0dcee2f292b6dad492b8c379daaf34806803a58"
     },
     {
-      "path": "templates/root/01_company/01_strategic/goal.md",
-      "sha256": "d06b94ee76399298e1b4187a31fa4fbedc13b0adc2aaeccefe56a012c162c803"
+      "path": "templates/root/00_компания/_входящее/README.md",
+      "sha256": "74dc265ec4b15dafade467abf1d96633b66269be719774cc7552c90fe1bb14a9"
     },
     {
-      "path": "templates/root/01_company/01_strategic/vision.md",
-      "sha256": "365344756a73321bab086ef4e25667af2808bd762af3d830e990d19cffbaddc4"
+      "path": "templates/root/00_компания/00_команда/оргструктура.md",
+      "sha256": "742f8ea5da386a935a4b81c00364167ac1761fe56a12cfa6b02bcb6121691760"
     },
     {
-      "path": "templates/root/01_company/02_team/01_org-structure.md",
-      "sha256": "33919a4cd1bb2ca12f75d1fbccf89a45c47b014185de890ac084c2070ea70e76"
+      "path": "templates/root/00_компания/00_показатели/README.md",
+      "sha256": "8601c8378665920d89229733ea8c6355d450f776014aca725f411a119ea121c9"
     },
     {
-      "path": "templates/root/01_company/03_metrics/business-metrics.md",
-      "sha256": "c55a370365532aa497b4cbf9678bda9278e23cad2b54c24559f5ab085db7ba12"
+      "path": "templates/root/00_компания/00_показатели/ключевые-показатели.md",
+      "sha256": "dd97d6788bb86bc9a1a108496fc45ba566c002e0396d2b1523edf91724564225"
     },
     {
-      "path": "templates/root/01_company/03_metrics/README.md",
-      "sha256": "5e4fc063a0cb2f525865182b8fe8e4a57ba4ea1af92bd19fb180617822f36dce"
+      "path": "templates/root/00_компания/00_стратегия/видение.md",
+      "sha256": "de7f4f66f5915454844dd81f1eb5d38bd814b82a5a20a20e8cbf27cb666a4c30"
     },
     {
-      "path": "templates/root/01_company/operating-model.md",
-      "sha256": "1c8f2a874e71da7ccc7c8b2aa9c37b0ca970f53bb2cec3fcc74c7c84459da676"
+      "path": "templates/root/00_компания/00_стратегия/цели.md",
+      "sha256": "63e4aeb56777d2b761078e80c7ddb15b2905bfb91c468d3411645a9c63b109c6"
     },
     {
-      "path": "templates/root/01_company/README.md",
-      "sha256": "c557dc8a5a256cee9e35280804947ea7dd25863e9bbf7869a5c43fc1c17e4f1f"
-    },
-    {
-      "path": "templates/root/01_company/zz_archive/README.md",
-      "sha256": "640a24784f296b1813baf0d6c73e1c74c73d9c96d9b630316900d66e7bd89fdc"
+      "path": "templates/root/00_компания/README.md",
+      "sha256": "0ba33c7cf60e99d97451b6fa60eee6146b0ae918019e80de6302d2b45e43df66"
     },
     {
       "path": "templates/root/AGENTS.md",
-      "sha256": "1d4ca129d5948a7f4aa19c5c0eba76d304253caa9e16b1a6a8778df60249989b"
+      "sha256": "170dd2c136af52f09397cf992ff0f8569359d4d26e71e7d286a306213dde1500"
     },
     {
       "path": "templates/root/CLAUDE.md",
@@ -189,31 +189,27 @@
     },
     {
       "path": "templates/root/README.md",
-      "sha256": "4e95c290788eced39380bd7ed45b1cbeafad0a701b56202d8f1ff3eff180ce90"
-    },
-    {
-      "path": "templates/root/zz_archive/README.md",
-      "sha256": "7fb7c1f355ec53883b99e193fee4068097c7e6dadec561e0be67a4c6d9123f8c"
-    },
-    {
-      "path": "templates/semantic-files/architecture.md",
-      "sha256": "aa8595258d58eb1e9cec5769e06b0f2c79a4622663b911641ed1a3d1332e5b1c"
-    },
-    {
-      "path": "templates/semantic-files/glossary.md",
-      "sha256": "b529ef64a7cdc0aa52cbf3956c38185587d9a5f3c4a908c52a9c7425cd0dc173"
-    },
-    {
-      "path": "templates/semantic-files/profile.md",
-      "sha256": "08c7a7cdf6cbd5e7e6a803dae2f3c64e28ade99edea9a16b65ab8b973ebacf42"
-    },
-    {
-      "path": "templates/semantic-files/setup.md",
-      "sha256": "5c7e7e9dde7fbb1b048115752ac96750bcb59e51f115b8d819c879a6a0268492"
+      "sha256": "1f6c0274ebdbfc156b05392b2cf41e8460563f10e73104ac0eae9061edd9f6b5"
     },
     {
       "path": "templates/semantic-files/speech-aliases.md",
       "sha256": "673a348867a9e7453706bb085913f52b2de2c5c1a356d7144f302e158f763708"
+    },
+    {
+      "path": "templates/semantic-files/архитектура.md",
+      "sha256": "aa8595258d58eb1e9cec5769e06b0f2c79a4622663b911641ed1a3d1332e5b1c"
+    },
+    {
+      "path": "templates/semantic-files/глоссарий.md",
+      "sha256": "b529ef64a7cdc0aa52cbf3956c38185587d9a5f3c4a908c52a9c7425cd0dc173"
+    },
+    {
+      "path": "templates/semantic-files/паспорт.md",
+      "sha256": "dce84e64d5f58973d585afb786f9af52e153ae06c9de951e1816e0bf909bc91f"
+    },
+    {
+      "path": "templates/база-знаний/README.md",
+      "sha256": "d27e5a99b089c0a82335751c93d9e16306ee62757cd33def86b5a36895ae0d85"
     }
   ]
 }

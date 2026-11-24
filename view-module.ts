@@ -1,7 +1,7 @@
 import { defineRpcContract, type BbPluginApi, type PluginAgentConfiguration, type PluginAgentConfigurationContext } from '@get-bb/plugin-sdk';
 import { upgradeViewReference } from './view-storage';
-import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, readdir } from 'node:fs/promises';
 import { z } from 'zod';
 import { idSchema, viewSchema, submitSchema, updateSchema, confirmScaffoldSchema } from 'bb-plugin-svaib-view-pilot/model';
 import { createViewBackend, viewSnapshotSchema, viewEventsSchema, viewMutationSchema, ViewTransportError,
@@ -9,13 +9,17 @@ import { createViewBackend, viewSnapshotSchema, viewEventsSchema, viewMutationSc
 import { createViewPluginContext, ViewContextError, type ViewAccountPort, type PersistentRootValidator } from './view-native-context';
 import { scaffoldConfirmationSchema, scaffoldConfigSchema } from 'bb-plugin-svaib-view-pilot/scaffold';
 import { spaceSetupDocument } from 'bb-plugin-svaib-view-pilot/agent-session';
-import { importScaffold, verifyScaffoldSnapshot, ScaffoldImportError } from './scaffold-import';
+import { assertImportRoot, importScaffold, verifyScaffoldSnapshot, ScaffoldImportError } from './scaffold-import';
 
 const threadIdSchema = z.string().regex(/^thr_[a-z0-9]+$/);
 const select = z.object({ threadId: threadIdSchema, viewId: idSchema }).strict();
-const expandedPathsSchema = z.array(z.string().min(1).max(2000).refine(path => !path.startsWith('/') && !path.split('/').some(part => !part || part === '.' || part === '..'))).max(100);
-const sourceHashSchema = z.string().regex(/^[0-9a-f]{64}$/);
-const rolesSchema = z.record(z.string().min(1).max(500), z.object({role:z.enum(['unit','aspect','kit','infrastructure','workspace']),source:z.string().min(1).max(800)}).strict());
+const expandedPathsSchema = z.array(z.string().min(1).max(2000).refine(path => !path.startsWith('/') && !path.split('/').some(part => !part || part === '.' || part === '..'))).max(100)
+  .describe('Папки для раскрытия: пути от корня, например ["00_компания"]. Корень уже раскрыт; абсолютные пути не принимаются.');
+const sourceHashSchema = z.string().regex(/^[0-9a-f]{64}$/).describe('sourceHash из результата svaib_view_prepare с теми же roles и expandedPaths.');
+const rolesSchema = z.record(z.string().min(1).max(500), z.object({
+  role:z.enum(['unit','aspect','kit','infrastructure','workspace']).describe('unit — направление; aspect — ракурс; kit — панель управления; infrastructure — служебная папка; workspace — пространство.'),
+  source:z.string().min(1).max(800).describe('Основание из прочитанного README: файл и смысл роли, например «README.md: компания как целое».'),
+}).strict()).describe('Необязательные уточнения автоматически распознанных ролей. Ключ — относительный путь, корень не указывается. Пример: {"00_company":{"role":"unit","source":"README.md: компания как целое"}}.');
 type OverviewInput = {roles?: z.infer<typeof rolesSchema>; expandedPaths?: string[]; expectedSourceHash?: string};
 const overviewSourceSchema = z.object({ schema: z.literal(1), root: z.string(), hash: z.string(), expandedPaths: expandedPathsSchema.optional() }).strict();
 const pollId = z.string().uuid();
@@ -53,7 +57,8 @@ const RESULT_TOOL = 'svaib_view_result';
 const PREVIOUS_TOOL = 'svaib_view_previous';
 const PREPARE_TOOL = 'svaib_view_prepare';
 const selectionSchema = z.object({
-  viewId: idSchema, companyId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/).optional(),
+  viewId: idSchema.describe('ID существующего View из ответа svaib_view_previous или открытия. Если ID неизвестен, используй svaib_view_open без viewId; ID компании здесь не подходит.'),
+  companyId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/).describe('Стабильный ID выбранной серверной компании. Обязателен, если в текущей папке нет привязки компании. Имя компании и локальный путь не подходят.').optional(),
   mode: z.literal('company').optional(), // accepted for older company callers; never a local fallback
 }).strict();
 const resultSchema = z.object({ id: idSchema, revision: z.number().int().positive(), cursor: z.number().int().positive(),
@@ -63,9 +68,9 @@ const resultSchema = z.object({ id: idSchema, revision: z.number().int().positiv
   confirmation: scaffoldConfirmationSchema.nullable(),
 }).strict();
 const messages: Record<string, string> = {
-  permission_denied: 'Нет доступа к представлению выбранной компании. Проверь подключение с партнёром.',
-  company_required: 'Сначала выбери компанию через онбординг.',
-  context_changed: 'Контекст разговора изменился. Открой новый чистый чат в нужной папке.',
+  permission_denied: 'Нет доступа к представлению выбранной компании. Проверь подключение с агентом.',
+  company_required: 'Не указан companyId выбранной компании.',
+  context_changed: 'Представление относится к другой компании или рабочей папке.',
   feature_disabled: 'Серверные представления пока не включены в этом контуре.',
   not_found: 'Это представление не найдено в выбранной компании.',
   revision_conflict: 'Представление уже изменилось. Перечитай его и повтори действие.',
@@ -76,11 +81,11 @@ function knownError(error: unknown) {
     return { code: error.name === 'AbortError' ? 'aborted' : 'timeout', message: 'Ожидание представления остановлено.' };
   if (error instanceof ViewContextError) return { code: error.code, message: error.message };
   if (error instanceof ScaffoldImportError) return { code: error.code, message: error.message };
-  if (error instanceof ViewTransportError) return { code: error.code, message: messages[error.code] ?? 'Представление отклонило запрос. Перечитай его или проверь подключение с партнёром.' };
+  if (error instanceof ViewTransportError) return { code: error.code, message: messages[error.code] ?? 'Представление отклонило запрос. Перечитай его или проверь подключение с агентом.' };
   const accountCode = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
   if (['authentication_required', 'resource_mismatch', 'company_context_unavailable', 'context_changed', 'invalid_arguments', 'mcp_unavailable', 'mcp_protocol_error'].includes(accountCode))
-    return { code: accountCode, message: messages[accountCode] ?? 'Подключение svaib не подтвердило доступ. Проверь вход в кабинет и выбранную компанию с партнёром.' };
-  return { code: 'view_unavailable', message: 'Не удалось загрузить представление. Проверь подключение с партнёром и повтори.' };
+    return { code: accountCode, message: messages[accountCode] ?? 'Подключение svaib не подтвердило доступ. Проверь вход в кабинет и выбранную компанию с агентом.' };
+  return { code: 'view_unavailable', message: 'Не удалось загрузить представление. Проверь подключение с агентом и повтори.' };
 }
 
 /** Register once from the root factory. Server MCP calls and UI share one backend OAuth grant. */
@@ -130,7 +135,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
     const stored = await readBinding(threadId);
     if (!stored?.success || stored.data.view_id !== viewId || stored.data.real_root !== live.realRoot ||
       JSON.stringify(stored.data.context) !== JSON.stringify(live.context))
-      throw new ViewContextError('view_binding_required', 'Попроси партнёра открыть или привязать представление в этом разговоре.');
+      throw new ViewContextError('view_binding_required', 'Попроси агента открыть или привязать представление в этом разговоре.');
     return createViewBackend({ binding: { ...live.context, view_id: viewId },
       readTrustedContext: async active => {
         const checked = await native.resolve(threadId, active);
@@ -145,6 +150,20 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
     const port = await backend(input.threadId, input.viewId, signal);
     try { return await run(port, signal); } finally { port.dispose(); }
   }
+  type Live = Awaited<ReturnType<typeof native.resolve>>;
+  function rootId(live: Live, device: string, inode: string) {
+    return createHash('sha256').update(JSON.stringify([live.context.host_id, live.realRoot, device, inode])).digest('hex');
+  }
+  async function currentRootId(live: Live) {
+    const stat = await lstat(live.realRoot, { bigint: true });
+    return rootId(live, String(stat.dev), String(stat.ino));
+  }
+  async function sourceRelation(live: Live, viewId: string, overview: {sourceId?: string; sourceHash: string}, currentId: string) {
+    if (overview.sourceId) return overview.sourceId === currentId ? 'same' : 'different';
+    const stored = overviewSourceSchema.safeParse(await bb.storage.kv.get(`screen:overview:${live.context.company_id}:${viewId}`));
+    if (!stored.success || stored.data.hash !== overview.sourceHash) return 'unknown';
+    return stored.data.root === live.realRoot ? 'same' : 'different';
+  }
   async function verifyOverviewSource(snapshot: Snapshot, live: Awaited<ReturnType<typeof native.resolve>>, viewId: string, active: AbortSignal) {
     const blocks = snapshot.view.document.blocks;
     const config = blocks.length === 1 && blocks[0].type === 'scaffold' && blocks[0].config.schemaVersion === 2 ? blocks[0].config : null;
@@ -153,6 +172,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       await bb.storage.kv.get(`screen:overview:${live.context.company_id}:${viewId}`));
     if (!source.success || source.data.root !== live.realRoot || source.data.hash !== config.overview.sourceHash)
       return 'unverified' as const;
+    if (config.overview.sourceId && config.overview.sourceId !== await currentRootId(live)) return 'unverified' as const;
     const current = await importScaffold(live.realRoot, { companyName: config.companyName,
       limits: { maxDepth: config.overview.maxDepth }, expandedPaths: source.data.expandedPaths, allowDepthBoundary: true, signal: active });
     return current.snapshot.hash === source.data.hash ? 'matches' as const : 'changed' as const;
@@ -194,7 +214,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
           : 'Представление подготовлено, но открытие вкладки BB не подтверждено. Не утверждай, что пользователь её видит; попроси открыть «Конструктор» в этом разговоре.' };
     } finally { port.dispose(); }
   }
-  async function openView(threadId: string, viewId: string, companyId: string | undefined, create: { requestId: string; companyName: string; onlyIfEmpty?: boolean } | undefined, active: AbortSignal) {
+  async function openView(threadId: string, viewId: string, companyId: string | undefined, create: { requestId: string; companyName: string; onlyIfEmpty?: boolean; sourceId?: string } | undefined, active: AbortSignal) {
     const live = await native.resolve(threadId, active, companyId);
     const result = await options.account.callMcpForContext({ name: 'view_open', arguments: {
       id: viewId, preset: 'space-setup', company_id: live.context.company_id, ...(create ? { create } : {}),
@@ -222,6 +242,10 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
     await verifyScaffoldSnapshot(live.realRoot,imported.snapshot,active);
     if(input.expectedSourceHash && imported.snapshot.hash!==input.expectedSourceHash)
       throw new ViewContextError('snapshot_changed','Папка изменилась после проверки агентом. Перечитай дерево перед показом.');
+    const sourceId = rootId(live, imported.snapshot.root.device, imported.snapshot.root.inode);
+    if (input.previousConfig?.overview?.sourceId && input.previousConfig.overview.sourceId !== sourceId)
+      throw new ViewContextError('overview_source_mismatch', 'Обзор относится к другой папке.');
+    imported.scaffoldConfig.overview!.sourceId = sourceId;
     imported.scaffoldConfig.overview!.capturedAt=new Date().toISOString();
     return imported;
   }
@@ -235,6 +259,8 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
     const oldBlock = previous?.document.blocks[0];
     if (previous && previous.document.blocks.length > 0 && (previous.document.blocks.length !== 1 || oldBlock?.type !== 'scaffold')) throw new ViewContextError('wrong_view_kind', 'Обновлять из папки можно только конструктор каркаса.');
     const previousConfig = oldBlock?.type === 'scaffold' && oldBlock.config.schemaVersion === 2 ? oldBlock.config : undefined;
+    if (previousConfig?.overview && await sourceRelation(live, input.viewId, previousConfig.overview, await currentRootId(live)) !== 'same')
+      throw new ViewContextError('overview_source_mismatch', 'Источник сохранённого обзора не совпадает с выбранной папкой или неизвестен.');
     const companyName = input.companyName ?? previousConfig?.companyName;
     if (!companyName) throw new ViewContextError('wrong_view_kind', 'Этот экран не является конструктором каркаса.');
     const imported = await prepareTree(live,{...input,companyName,previousConfig},active);
@@ -271,6 +297,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
     return { imported, live };
   }
   async function hasExistingContent(root: string): Promise<boolean> {
+    assertImportRoot(root);
     const entries = await readdir(root, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name !== '.svaib' || !entry.isDirectory() || entry.isSymbolicLink()) return true;
@@ -306,8 +333,19 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
           if (!found.views.some(item => item.id === input.viewId)) throw new ViewContextError('view_choice_stale', 'Выбранный конструктор больше не доступен. Обнови список.');
           return reopen(input.viewId);
         }
-        if (found.views.length === 1) return reopen(found.views[0].id);
-        if (found.views.length > 1) return { choices: found.views };
+        const sourceId = await currentRootId(live);
+        const choices = [];
+        for (const item of found.views) {
+          if (item.kind === 'overview') {
+            const snapshot = viewSnapshotSchema.parse(await remote('view_get', {id: item.id}));
+            const block = snapshot.view.document.blocks[0];
+            if (block?.type === 'scaffold' && block.config.overview &&
+              await sourceRelation(live, item.id, block.config.overview, sourceId) === 'different') continue;
+          }
+          choices.push(item);
+        }
+        if (choices.length === 1) return reopen(choices[0].id);
+        if (choices.length > 1) return { choices };
         if (!allowCreate) throw new ViewContextError('view_discovery_changed', 'Список конструкторов изменился. Повтори открытие.');
         const existing = await hasExistingContent(live.realRoot);
         if (JSON.stringify(await native.resolve(input.threadId, active)) !== JSON.stringify(live)) throw new ViewTransportError('context_changed');
@@ -321,7 +359,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
           }
           if(input.expectedSourceHash)throw new ViewContextError('snapshot_changed','Папка изменилась после проверки агентом. Подготовь дерево заново.');
           return await openView(input.threadId, viewId, input.companyId,
-            { requestId: randomUUID(), companyName: input.companyName, onlyIfEmpty: true }, active);
+            { requestId: randomUUID(), companyName: input.companyName, onlyIfEmpty: true, ...(found.views.length ? {sourceId} : {}) }, active);
         }
         catch (error) {
           if (error instanceof ViewTransportError && ['view_discovery_changed', 'already_exists'].includes(error.code)) return choose(false);
@@ -358,7 +396,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       while (cursor.parentId) {parts.unshift(cursor.name); cursor = nodes.get(cursor.parentId)!;}
       const live = await native.resolve(input.threadId, active);
       if (await verifyOverviewSource(snapshot, live, input.viewId, active) !== 'matches')
-        throw new ViewContextError('snapshot_changed', 'Папка изменилась. Попроси партнёра обновить каркас с сохранением пожеланий.');
+        throw new ViewContextError('snapshot_changed', 'Папка изменилась. Попроси агента обновить каркас с сохранением пожеланий.');
       const source = overviewSourceSchema.parse(await bb.storage.kv.get(`screen:overview:${live.context.company_id}:${input.viewId}`));
       const expandedPaths = [...new Set([...(source.expandedPaths ?? []), parts.join('/')])];
       expandedPathsSchema.parse(expandedPaths);
@@ -390,23 +428,25 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       return null;
     },
   });
-  bb.agents.registerTool({ name: BIND_TOOL, description: 'Показать существующий серверный MCP View в этом разговоре BB. При первом вызове в пустой папке передай ID выбранной реальной компании; привязка и права проверяются сервером. Файлы не изменяются.',
+  bb.agents.registerTool({ name: BIND_TOOL, description: 'Показать в BB существующий серверный View по его viewId.',
     parameters: selectionSchema, execute: async ({ viewId, companyId }, ctx) =>
       JSON.stringify(await respond(() => bind(ctx.threadId, viewId, requestSignal(ctx.signal), companyId))) });
-  bb.agents.registerTool({ name: PREPARE_TOOL, description: 'Прочитать актуальное дерево папки для проверки агентом до показа пользователю. View не создаётся, не меняется и не открывается. Проверь состав, исключения, раскрытие и роли по README; при необходимости повтори с исправленными roles и expandedPaths. Затем передай те же параметры и sourceHash как expectedSourceHash при показе.',
+  bb.agents.registerTool({ name: PREPARE_TOOL, description: 'Локальный инструмент BB читает выбранную постоянную папку разговора. Возвращает дерево, границы и sourceHash для показа конструктора.',
     parameters: selectionSchema.partial({viewId:true}).extend({companyName:z.string().min(1).max(2000),roles:rolesSchema.optional(),expandedPaths:expandedPathsSchema.optional()}).strict(),
     execute: async ({viewId,companyId,companyName,roles,expandedPaths},ctx) => JSON.stringify(await respond(async () => {
       const active=requestSignal(ctx.signal),live=await native.resolve(ctx.threadId,active,companyId);
-      if(!await hasExistingContent(live.realRoot))throw new ViewContextError('empty_space','Папка пустая. Для нового пространства проверь каноническую заготовку space-scaffold перед показом.');
+      if(!await hasExistingContent(live.realRoot))throw new ViewContextError('empty_space','Выбранная папка пустая. Обзор существующего пространства недоступен.');
       const previous=viewId ? viewSnapshotSchema.parse(await remote(live,'view_get',{id:viewId},active)).view : undefined;
       const block=previous?.document.blocks[0];
       const previousConfig=block?.type==='scaffold' && block.config.schemaVersion===2 ? block.config : undefined;
+      if (viewId && previousConfig?.overview && await sourceRelation(live, viewId, previousConfig.overview, await currentRootId(live)) !== 'same')
+        throw new ViewContextError('overview_source_mismatch', 'Источник прежних ролей не совпадает с выбранной папкой или неизвестен.');
       const imported=await prepareTree(live,{companyName,roles,expandedPaths,previousConfig},active);
       return {sourceHash:imported.snapshot.hash,config:imported.scaffoldConfig,
         ...(previous ? {viewId,expectedRevision:previous.revision} : {}),
         instruction:'Это черновик для проверки агентом. Проверь дерево осознанно до передачи в View; сам факт вызова инструмента проверкой не считается.'};
     })) });
-  bb.agents.registerTool({ name: OPEN_TOOL, description: 'Открыть конструктор выбранной компании. Перед показом актуального пространства проверь черновик svaib_view_prepare и передай те же roles, expandedPaths и expectedSourceHash; для сохранённого View также прочитанную expectedRevision. Без viewId система ищет подходящие экраны; из списка агент выбирает последний нужного источника. ID нового экрана определяет система; подтверждение дерева файлы не создаёт.',
+  bb.agents.registerTool({ name: OPEN_TOOL, description: 'Открыть конструктор компании. Без viewId предлагает подходящие View. Для показа дерева передай параметры проверенного черновика и его sourceHash в expectedSourceHash, для сохранённого View — также expectedRevision.',
     parameters: selectionSchema.partial({ viewId: true }).extend({ companyName: z.string().min(1).max(2000).optional(), roles:rolesSchema.optional(),expandedPaths:expandedPathsSchema.optional(),expectedSourceHash:sourceHashSchema.optional(),expectedRevision:z.number().int().positive().optional(), create: z.object({ requestId: z.string().regex(/^[a-zA-Z0-9-]{1,100}$/), companyName: z.string().min(1).max(2000) }).strict().optional() }).strict(),
     execute: async ({ viewId, create, companyId, companyName,roles,expandedPaths,expectedSourceHash,expectedRevision }, ctx) => {
       if (viewId && (create || !companyName)) return JSON.stringify(await respond(() => openView(ctx.threadId, viewId, companyId, create, requestSignal(ctx.signal))));
@@ -419,7 +459,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
         return result.value;
       }));
     } });
-  bb.agents.registerTool({ name: EXISTING_TOOL, description: 'Показать ограниченный снимок существующей рабочей папки в View. Корень берётся только из проверенной среды BB; роли передаются агентом с основанием. Нераскрытые ветки защищены; снимок предназначен для обзора, не для файловых изменений. Для обновления того же View передай прочитанную expectedRevision; это заменит данные обзора и снимет прежнее подтверждение. Канонические служебные папки и kit распознаются сами; для остальных ролей прочитай README.',
+  bb.agents.registerTool({ name: EXISTING_TOOL, description: 'Показать снимок рабочей папки в View. Обновление по expectedRevision заменяет снимок и снимает подтверждение. Используй параметры и хеш проверенного черновика.',
     parameters: selectionSchema.extend({ expectedRevision: z.number().int().positive().optional(), expectedSourceHash:sourceHashSchema.optional(),requestId: z.string().regex(/^[a-zA-Z0-9-]{1,100}$/), companyName: z.string().min(1).max(100), expandedPaths: expandedPathsSchema.optional(),
       roles: rolesSchema.optional(),
     }).strict(),
@@ -430,7 +470,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       return { ...opened, coverage: 'limited-overview', hiddenBranches: imported.snapshot.ignoredRoots.length,
         warning: 'Это частичный обзор, а не план изменения файлов. Нераскрытые ветки сохранены; перед изменениями нужен полный разбор.' };
     })) });
-  bb.agents.registerTool({ name: RESULT_TOOL, description: 'Прочитать сохранённое состояние View и намерение человека вместе с обратной связью и границами снимка. Можно обсуждать и неподтверждённое состояние; оно само не разрешает файловых изменений и не закрывает онбординг.',
+  bb.agents.registerTool({ name: RESULT_TOOL, description: 'Прочитать состояние View, выбор и пожелания человека. Изменение файлов требует отдельного согласования.',
     parameters: z.object({ viewId: idSchema }).strict(), execute: async ({ viewId }, ctx) => JSON.stringify(await respond(async () => {
       const active = requestSignal(ctx.signal);
       const live = await native.resolve(ctx.threadId, active);
@@ -450,7 +490,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       if (JSON.stringify(after) !== JSON.stringify(live)) throw new ViewTransportError('context_changed');
       return parsed.data;
     })) });
-  bb.agents.registerTool({ name: OVERVIEW_TOOL, description: 'Прочитать сохранённое дерево ограниченного обзора и его границы для обсуждения. Результат не является планом файловых изменений.',
+  bb.agents.registerTool({ name: OVERVIEW_TOOL, description: 'Прочитать сохранённое дерево View и границы снимка.',
     parameters: z.object({ viewId: idSchema }).strict(), execute: async ({ viewId }, ctx) => JSON.stringify(await respond(async () => {
       const active = requestSignal(ctx.signal);
       const live = await native.resolve(ctx.threadId, active);
@@ -458,35 +498,32 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
       const blocks = snapshot.view.document.blocks;
       if (blocks.length !== 1 || blocks[0].type !== 'scaffold' || blocks[0].config.schemaVersion !== 2 || !blocks[0].config.overview)
         throw new ViewContextError('not_overview', 'Этот View не является ограниченным обзором.');
-      const stored = overviewSourceSchema.safeParse(
-        await bb.storage.kv.get(`screen:overview:${live.context.company_id}:${viewId}`));
-      let source: 'matches' | 'changed' | 'unverified' = 'unverified';
-      if (stored.success && stored.data.root === live.realRoot && stored.data.hash === blocks[0].config.overview.sourceHash) {
-        const current = await importScaffold(live.realRoot, { companyName: blocks[0].config.companyName,
-          limits: { maxDepth: blocks[0].config.overview.maxDepth }, expandedPaths:stored.data.expandedPaths,allowDepthBoundary: true, signal: active });
-        source = current.snapshot.hash === stored.data.hash ? 'matches' : 'changed';
-      }
+      const source = await verifyOverviewSource(snapshot, live, viewId, active);
       if (JSON.stringify(await native.resolve(ctx.threadId, active)) !== JSON.stringify(live)) throw new ViewTransportError('context_changed');
       return { viewId, revision: snapshot.view.revision, cursor: snapshot.cursor,
         config: blocks[0].config, status: 'overview-only', source,
         warning: source === 'matches' ? 'Исходный снимок соответствует рабочей папке в пределах его границ; изменения дерева выражают намерение, перед файловыми действиями нужен полный разбор.'
           : source === 'changed' ? 'Рабочая папка изменилась после снимка; повторите обзор перед выводами о текущем состоянии.'
-            : 'Связь обзора с текущей папкой не подтверждена. Не выдавайте его за текущую структуру; предложите обновить данные того же View после согласия.' };
+            : 'Связь обзора с текущей папкой не подтверждена. Не выдавайте его за текущую структуру; выберите обзор подтверждённого источника.' };
     })) });
-  bb.agents.registerTool({ name: PREVIOUS_TOOL, description: 'После выбора компании и постоянной папки прочитать доступные конструкторы без открытия. Агент выбирает последний подходящий View этой компании и источника, читает пожелания и готовит актуальное дерево перед показом. Не читает переписку и не переносит прежнюю папку.',
+  bb.agents.registerTool({ name: PREVIOUS_TOOL, description: 'Найти конструкторы выбранной компании и папки без открытия. Учитывай пожелания к последнему подходящему View.',
     parameters: z.object({ companyId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/) }).strict(),
     execute: async ({ companyId }, ctx) => JSON.stringify(await respond(async () => {
       const active = requestSignal(ctx.signal);
       const live = await native.resolve(ctx.threadId, active, companyId);
       const found = z.object({views: z.array(z.object({id: idSchema, title: z.string(), updatedAt: z.string(), kind: z.enum(['overview', 'scaffold'])})), complete: z.boolean()}).parse(await remote(live, 'view_get', {discover: true, component: 'scaffold'}, active));
       const views = [];
+      const sourceId = await currentRootId(live);
       for (const item of found.views) {
         const snapshot = viewSnapshotSchema.parse(await remote(live, 'view_get', {id: item.id}, active));
         const block = snapshot.view.document.blocks[0];
         const capturedAt = block?.type === 'scaffold' && block.config.schemaVersion === 2 ? block.config.overview?.capturedAt ?? null : null;
-        views.push({viewId: item.id, title: item.title, revision: snapshot.view.revision, updatedAt: item.updatedAt,
+        const relation = block?.type === 'scaffold' && block.config.overview
+          ? await sourceRelation(live, item.id, block.config.overview, sourceId) : undefined;
+        views.push({sourceRelation: relation, viewId: item.id, title: item.title, revision: snapshot.view.revision, updatedAt: item.updatedAt,
           kind: item.kind, capturedAt, refreshSuggested: (item.kind === 'overview' || await hasExistingContent(live.realRoot)) && (!capturedAt || Date.now() - Date.parse(capturedAt) > 24 * 60 * 60 * 1000)});
       }
+      if (JSON.stringify(await native.resolve(ctx.threadId, active)) !== JSON.stringify(live)) throw new ViewTransportError('context_changed');
       return { views, truncated: !found.complete };
     })) });
   function dispose() { lifetime.abort(); for (const poll of polls.values()) poll.abort(); polls.clear(); canceled.clear(); }
@@ -494,8 +531,7 @@ export function registerViewModule(bb: BbPluginApi, options: { account: ViewAcco
   bb.events.on('thread.deleted', ({ thread }) => { for (const [key, poll] of polls) if (key.startsWith(thread.id + ':')) poll.abort(); });
   return {
     configure(_context: PluginAgentConfigurationContext): PluginAgentConfiguration {
-      return { tools: [OPEN_TOOL, EXISTING_TOOL, OVERVIEW_TOOL, BIND_TOOL, RESULT_TOOL, PREVIOUS_TOOL, PREPARE_TOOL], skills: [], instructions:
-        'Конструктор — опция. Используй выбранную человеком компанию и текущую папку проекта BB; порядок — в space-scaffold. Для актуального пространства сначала найди последний подходящий View через svaib_view_previous и прочитай дерево и обратную связь через svaib_view_result. Неполный список не доказывает отсутствия View. Неприменённые пожелания предложи перенести на актуальную структуру или показать диск; рекомендуй перенос, конфликты уточни. До показа получи черновик через svaib_view_prepare и осознанно проверь состав, скрытое, раскрытие и роли по README и канону. Скрипт готовит черновик; агент отвечает за исходное дерево и последующий разбор пожеланий. Исправь roles и expandedPaths, повтори подготовку при необходимости. Вызов инструмента сам по себе не означает проверки. Покажи проверенное через svaib_view_open с companyId и companyName без viewId либо обнови выбранный ID через svaib_view_existing: передай те же roles, expandedPaths, expectedSourceHash и прочитанную expectedRevision. Из choices сам выбери последний подходящий View того же источника. Инструмент сам пожелания не переносит; не затирай их обновлением. Без пожеланий обновляй без вопроса. Сохрани нужную обратную связь из дублей и убери их при наличии явного согласия; уже данное поручение повторно не спрашивай. Если подготовка или показ недоступны, назови ограничение, сохрани прежнее и продолжай через разговор и файлы. Старый снимок не выдавай за актуальный. При presentation=not-opened предложи кнопку «Конструктор» или доступную ссылку. Ревизии — техническая деталь; при конфликте перечитай состояние. Файловые изменения обсуди и выполни через space-scaffold по общим правилам.' };
+      return { tools: [OPEN_TOOL, EXISTING_TOOL, OVERVIEW_TOOL, BIND_TOOL, RESULT_TOOL, PREVIOUS_TOOL, PREPARE_TOOL], skills: [] };
     }, dispose,
   };
 }

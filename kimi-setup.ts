@@ -1,7 +1,8 @@
 import { createKimiPiSupport } from './kimi-pi-support';
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
-import { browserContract } from './experiments/account-prototype/browser-contract';
+import { browserContract } from './account/browser-contract';
 import { kimiRpcContract, kimiViewSchema, type KimiAgent, type KimiView } from './kimi-contract';
 import { kimiDiagnostics, kimiDiagnosticSignals, kimiStep, kimiErrorFields, kimiVersion, type KimiDiagnostic } from './kimi-diagnostics';
 
@@ -16,7 +17,7 @@ async function bounded<T>(work: Promise<T>, ms = 30_000): Promise<T> {
 }
 
 /** Owns only local Kimi UI state. It never reads/writes svaib onboarding marks. */
-async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 'claude-code' | 'pi', pi: Awaited<ReturnType<typeof createKimiPiSupport>>, diagnostics: { write: (event: KimiDiagnostic) => void; routes: Map<string, (event: KimiDiagnostic) => void> }, piMode: 'native' | 'managed' = 'native') {
+async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 'claude-code' | 'pi', pi: Awaited<ReturnType<typeof createKimiPiSupport>>, diagnostics: { write: (event: KimiDiagnostic) => void; routes: Map<string, (event: KimiDiagnostic) => void> }, piMode: 'native' | 'managed' = 'native', maintenance = async () => ({ update: true, trust: true })) {
   const isPi = harness === 'pi';
   const nativePi = isPi && piMode === 'native';
   const PROVIDER = isPi ? 'pi' : 'acp-claude-kimi';
@@ -114,12 +115,34 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     catch (error) { operationLog(step, 'failure', { reason: abort.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - started, ...kimiErrorFields(error) }); throw error; }
     finally { diagnostics.routes.delete(diagnosticId); if (activePreparation === diagnosticId) activePreparation = null; }
   }
-  const prepareProfile = (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => hostMutation('prepare', reason,
-    diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
-  const preparePi = (apiKey: string | undefined, replaceKey = false) => hostMutation(replaceKey ? 'key-replace' : 'prepare', replaceKey ? 'key-change' : 'setup',
-    diagnosticId => client.call('kimiPiPrepare', { ...(apiKey ? { apiKey } : {}), replaceKey, diagnosticId }, target()));
-  const prepareNativePi = (apiKey: string | undefined, replaceKey = false) => hostMutation(replaceKey ? 'key-replace' : 'prepare', replaceKey ? 'key-change' : 'setup',
-    diagnosticId => client.call('kimiPiNativePrepare', { ...(apiKey ? { apiKey } : {}), replaceKey, diagnosticId }, target()));
+  let previousOwnedAgent: KimiAgent | null = null;
+  async function inspectProfile() {
+    const status = await client.call('kimiInspect', null, target());
+    previousOwnedAgent = status.previousAgent ?? status.agent;
+    return status;
+  }
+  async function prepareHarness(registration: { command: string; args: string[]; agentDir?: string }) {
+    const cwd = registration.agentDir ?? dirname(registration.args[0]);
+    try { await client.call('harnessMaintain', { target: { provider: PROVIDER, executable: registration.command, args: registration.args, cwd,
+      ...(registration.agentDir ? { configRoot: registration.agentDir } : {}) }, options: { ...await maintenance(), install: true } }, target()); }
+    catch { log('harness-maintenance', 'failure', { reason: 'failed' }); }
+  }
+  const prepareProfile = async (apiKey: string | undefined, reason: KimiDiagnostic['reason']) => {
+    await inspectProfile();
+    const agent = await hostMutation('prepare', reason,
+      diagnosticId => client.call('kimiPrepare', { ...(apiKey ? { apiKey } : {}), diagnosticId }, target()));
+    await prepareHarness(agent); return agent;
+  };
+  const preparePi = async (apiKey: string | undefined, replaceKey = false) => {
+    const registration = await hostMutation(replaceKey ? 'key-replace' : 'prepare', replaceKey ? 'key-change' : 'setup',
+      diagnosticId => client.call('kimiPiPrepare', { ...(apiKey ? { apiKey } : {}), replaceKey, diagnosticId }, target()));
+    await prepareHarness(registration); return registration;
+  };
+  const prepareNativePi = async (apiKey: string | undefined, replaceKey = false) => {
+    const registration = await hostMutation(replaceKey ? 'key-replace' : 'prepare', replaceKey ? 'key-change' : 'setup',
+      diagnosticId => client.call('kimiPiNativePrepare', { ...(apiKey ? { apiKey } : {}), replaceKey, diagnosticId }, target()));
+    await prepareHarness(registration); return registration;
+  };
   async function inspectNativePi() {
     try { await pi.nativePreflight(); }
     catch (error) {
@@ -212,9 +235,8 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     return code === 'PI_FOREIGN_ENV' ? 'В BB уже задан собственный запуск или профиль Pi. Настройки сохранены. Продолжи по справке Pi с помощником.'
       : code === 'PI_UNSUPPORTED' ? 'В этой версии BB автоматическая настройка Pi недоступна. Обнови BB или продолжи по ручной справке с помощником.'
       : code === 'PI_WRONG_HOST' ? 'Компьютер настройки изменился. Подключи исходный компьютер BB и повтори.'
-      : code === 'PI_MULTIPLE_HOSTS' ? 'В BB подключено несколько компьютеров. Автоматическая настройка Pi рассчитана на один; помощник проведёт ручную настройку на выбранном компьютере, сохранив остальные.'
       : code === 'PI_NATIVE_INSTALL_FAILED' || code === 'PI_NATIVE_INSTALL_UNAVAILABLE' ? 'BB не подтвердил запуск штатного Pi после установки. Повтори проверку; если Pi не запускается, помощник проверит Node/npm или поможет выбрать резервную установку.'
-      : code === 'PI_NATIVE_PROFILE_CHANGED' ? 'Настройки Kimi изменились после нашей записи. Существующий ключ сохранён; нужна помощь партнёра.'
+      : code === 'PI_NATIVE_PROFILE_CHANGED' ? 'Настройки Kimi изменились после нашей записи. Существующий ключ сохранён; нужна помощь агента.'
       : 'Не удалось подготовить Pi. Настройки сохранены. Нажми «Продолжить настройку»; при повторной ошибке попроси помощника проверить журнал.';
   }
   async function inspectPi() {
@@ -222,7 +244,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     const status = await client.call('kimiPiInspect', null, target());
     const external = status.hasExternalProfile || await pi.hasExternalCredentials();
     if (status.profile === 'blocked') return save({ stage: 'blocked', phase: null, canReplaceKey: false,
-      message: 'Профиль Pi изменён. Существующие файлы сохранены; нужна помощь партнёра.' });
+      message: 'Профиль Pi изменён. Существующие файлы сохранены; нужна помощь агента.' });
     if (status.profile === 'ready' && status.registration) {
       await pi.preflight();
       // Read-only inspection never activates or rewrites provider settings.
@@ -302,7 +324,8 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     }
   }
   function ownsRegistration(current: Record<string, unknown> | undefined, agent: KimiAgent) {
-    return sameRegistration(current, agent) || !!view.registrationGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === view.registrationGeneration;
+    return sameRegistration(current, agent) || !!previousOwnedAgent && sameRegistration(current, previousOwnedAgent)
+      || !!view.registrationGeneration && (current?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === view.registrationGeneration;
   }
   function sameRegistration(current: Record<string, unknown> | undefined, agent: KimiAgent) {
     return !!current && current.command === agent.command && JSON.stringify(current.args) === JSON.stringify(agent.args);
@@ -345,7 +368,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         log('bb-discovery', 'failure', { reason: 'unavailable', elapsedMs: Date.now() - started });
         return null;
       }
-      const status = await client.call('kimiInspect', null, target());
+      const status = await inspectProfile();
       operation = 'settings-read';
       const owned = status.agent && sameRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent);
       // Keep the modern freshness request. A variable also typechecks against
@@ -367,7 +390,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
   }
   async function inspect() {
     if (isPi) return nativePi ? inspectNativePi() : inspectPi();
-    const status = await client.call('kimiInspect', null, target());
+    const status = await inspectProfile();
     const providerExists = await hasProvider();
     if (status.profile === 'partial' && status.needsKey && (!providerExists || status.agent && ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent))) {
       return save({ stage: 'key', phase: null, verifyModel: null, canReplaceKey: false,
@@ -384,7 +407,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     }
     return save({ stage: status.profile === 'blocked' ? 'blocked'
       : status.profile === 'absent' || status.needsKey ? 'key' : 'registration',
-    message: status.profile === 'blocked' ? 'Папка настройки изменена. Существующие файлы сохранены; нужна помощь партнёра.' : '',
+    message: status.profile === 'blocked' ? 'Папка настройки изменена. Существующие файлы сохранены; нужна помощь агента.' : '',
     canReplaceKey: false, verifyModel: null, phase: null,
     });
   }
@@ -412,10 +435,20 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     const manualGeneration = manualGenerationFor(agent);
     const generation = manualGeneration ?? randomUUID();
     pendingRegistrationGeneration = generation;
-    if (manualGeneration && !knownCli && (existing?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation) return true;
+    const suppliedRoots = existing?.nativeSkillRoots as Record<string, unknown> | undefined;
+    // Replace the generated root in place; user additions, removals and project
+    // discovery rules belong to the user, including an intentionally empty list.
+    const previousRoots = new Set(previousOwnedAgent?.nativeSkillRoots.user ?? agent.nativeSkillRoots.user);
+    const nativeSkillRoots = suppliedRoots && typeof suppliedRoots === 'object' && !Array.isArray(suppliedRoots)
+      ? { ...suppliedRoots, user: Array.isArray(suppliedRoots.user)
+        ? [...new Set(suppliedRoots.user.flatMap(root => previousRoots.has(root) ? agent.nativeSkillRoots.user : [root]))]
+        : agent.nativeSkillRoots.user }
+      : agent.nativeSkillRoots;
+    if (manualGeneration && !knownCli && (existing?.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation
+      && JSON.stringify(existing?.nativeSkillRoots) === JSON.stringify(nativeSkillRoots)) return true;
     const { modelCli, ...preserved } = existing ?? agent;
     const updated = {
-      ...preserved, command: agent.command, args: agent.args, ...(!knownCli && modelCli ? { modelCli } : {}),
+      ...preserved, command: agent.command, args: agent.args, nativeSkillRoots, ...(!knownCli && modelCli ? { modelCli } : {}),
       env: { ...((existing?.env ?? {}) as Record<string, string>), SVAIB_KIMI_CATALOG_GENERATION: generation },
     };
     phase('settings-write');
@@ -426,6 +459,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     phase('registration-verify');
     if (!actual) throw new Error('Registration not saved');
     const confirmed = sameRegistration(actual, agent)
+      && JSON.stringify(actual.nativeSkillRoots) === JSON.stringify(nativeSkillRoots)
       && (actual.env as Record<string, string> | undefined)?.SVAIB_KIMI_CATALOG_GENERATION === generation;
     if (confirmed) await save({ registrationGeneration: generation });
     return confirmed;
@@ -459,7 +493,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     catch (error) { return save({ stage: 'registration', phase: null, message: error instanceof Error ? error.message : 'Не удалось подготовить компьютер.' }); }
     if (isPi) return nativePi ? startNativePi(apiKey) : startPi(apiKey);
     if (await hasProvider()) {
-      const status = await client.call('kimiInspect', null, target());
+      const status = await inspectProfile();
       const current = (await agents()).find(item => item.id === 'claude-kimi');
       if (status.needsKey && !apiKey && status.agent && ownsRegistration(current, status.agent)) return inspect();
       await save({ hidden: false, stage: 'installing', automatic: true, phase: 'access', startedAt: Date.now(), message: '' });
@@ -479,12 +513,12 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
           } else await save({ stage: 'verify', canReplaceKey: false, verifyModel: await resolveVerifyModel() });
           if (view.stage === 'verify') await beginAutomaticCheck();
           else await save({ phase: null });
-        } catch { apiKey = undefined; await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль. Существующие файлы сохранены; повтори настройку или обратись к партнёру.' }); }
+        } catch { apiKey = undefined; await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль. Существующие файлы сохранены; повтори настройку или обратись к агенту.' }); }
       };
       job = run().finally(() => { job = null; }); void job.catch(() => {});
       return snapshot();
     }
-    const status = await client.call('kimiInspect', null, target());
+    const status = await inspectProfile();
     if (status.profile === 'blocked' || (status.profile === 'absent' || status.needsKey) && !apiKey) return inspect();
     await save({ hidden: false, stage: 'installing', message: '', manualRegistration: null, phase: 'components', startedAt: Date.now(), automatic: true });
     // The key exists only in this call's memory and host RPC, never KV, settings,
@@ -502,7 +536,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
         }
       } catch {
         apiKey = undefined;
-        if (!disposed) await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль Kimi. Существующие файлы сохранены. Нажми «Продолжить настройку»; если ошибка повторяется, попроси партнёра проверить журнал настройки.' });
+        if (!disposed) await save({ stage: 'registration', phase: null, message: 'Не удалось подготовить профиль Kimi. Существующие файлы сохранены. Нажми «Продолжить настройку»; если ошибка повторяется, попроси агента проверить журнал настройки.' });
       }
     };
     job = run().finally(() => { job = null; });
@@ -746,7 +780,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       replacing = true;
       try {
         await repairRequirements();
-        const status = await client.call('kimiInspect', null, target());
+        const status = await inspectProfile();
         const current = (await agents()).find(item => item.id === 'claude-kimi');
         if (!status.agent || !ownsRegistration(current, status.agent)) throw new Error('Регистрация Kimi изменилась. Существующее подключение сохранено.');
         // The installing interlude keeps checkResponse off: a late reply of the
@@ -772,7 +806,7 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
     if (isPi || disposed || occupied() || attempt || !hostId || !view.canReplaceKey
       || view.catalogCheckedAt !== null && Date.now() - view.catalogCheckedAt < CATALOG_TTL) return;
     job = kimiStep(log, 'refresh', async () => {
-      const status = await client.call('kimiInspect', null, target());
+      const status = await inspectProfile();
       if (status.profile !== 'ready' || !status.agent || !ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), status.agent)) return;
       const agent = await hostMutation('prepare', reason, diagnosticId => client.call('kimiRefreshCatalog', { diagnosticId }, target()));
       if (!await writeRegistration(agent)) return;
@@ -792,13 +826,28 @@ async function createKimiSetup(bb: BbPluginApi, hostId: string | null, harness: 
       if (!signal.aborted) await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
     },
   });
-  return { handlers, runtime: () => client.call('kimiPiInspect', null, target()),
+  return { handlers,
+    async prepareExisting() {
+      if (occupied() || attempt) throw new Error('Дождись завершения настройки Kimi.');
+      if (isPi) {
+        if (nativePi || !pi.owned() || !await pi.managedActive()) return;
+        await pi.preflight();
+        const current = await client.call('kimiPiInspect', null, target());
+        if (!current.registration) return;
+        await pi.activate(await client.call('kimiPiPrepare', { replaceKey: false }, target()));
+        return;
+      }
+      const current = await inspectProfile();
+      if (!current.agent || !ownsRegistration((await agents()).find(item => item.id === 'claude-kimi'), current.agent)) return;
+      const prepared = await client.call('kimiPrepare', {}, target());
+      if (!await writeRegistration(prepared)) throw new Error('Регистрация Kimi изменилась. Исходный профиль сохранён.');
+    }, runtime: () => client.call('kimiPiInspect', null, target()),
     nativeRuntime: async () => { await pi.nativePreflight(); return client.call('kimiPiNativeInspect', null, target()); },
     busy: () => occupied() || !!attempt, settled: async () => { await starting; await job; await verificationStart; } };
 }
 
 /** One card, independent profiles and ephemeral checks. Existing state stays CC. */
-export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) {
+export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null, maintenance = async () => ({ update: true, trust: true })) {
   const write = (event: KimiDiagnostic) => {
     try { const line = '[kimi] ' + JSON.stringify(event); if (event.outcome === 'failure' || event.outcome === 'fallback') bb.log.warn(line); else bb.log.info(line); } catch { /* Diagnostics cannot fail setup. */ }
   };
@@ -815,9 +864,9 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
   // Preserve an earlier explicitly configured isolated installation.
   let piMode: 'native' | 'managed' = savedMode === 'managed' || savedMode == null && pi.owned() ? 'managed' : 'native';
   let selected = await bb.storage.kv.get(selectionKey) === 'pi' ? 'pi' : 'claude-code';
-  const cc = await createKimiSetup(bb, hostId, 'claude-code', pi, diagnostics);
-  const nativePi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'native');
-  const managedPi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'managed');
+  const cc = await createKimiSetup(bb, hostId, 'claude-code', pi, diagnostics, 'native', maintenance);
+  const nativePi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'native', maintenance);
+  const managedPi = await createKimiSetup(bb, hostId, 'pi', pi, diagnostics, 'managed', maintenance);
   const current = () => selected === 'pi' ? piMode === 'managed' ? managedPi : nativePi : cc;
   let selecting: Promise<KimiView> | null = null;
   const busy = () => cc.busy() || nativePi.busy() || managedPi.busy();
@@ -857,5 +906,9 @@ export async function registerKimiSetup(bb: BbPluginApi, hostId: string | null) 
     kimiReplaceKey: async input => (await ready()).kimiReplaceKey(input),
   });
   return { status: async () => (await ready()).kimiStatus(),
+    prepareExisting: async (provider: string) => {
+      if (provider === 'acp-claude-kimi') await cc.prepareExisting();
+      else if (provider === 'pi' && piMode === 'managed') await managedPi.prepareExisting();
+    },
     settled: async () => { await selecting; await cc.settled(); await nativePi.settled(); await managedPi.settled(); } };
 }

@@ -1,5 +1,5 @@
 import type { PluginKvStorage } from '@get-bb/plugin-sdk';
-import type { AccountView } from './experiments/account-prototype/contracts';
+import type { AccountView } from './account/contracts';
 import { defaultUserPreferences, preferencesUpdateSchema, userPreferencesSchema, USER_PREFERENCES_BYTE_BUDGET, type PreferencesView } from './user-preferences-contract';
 import { z } from 'zod';
 

@@ -65,6 +65,21 @@ export async function inspectKimi(root: string, signal: AbortSignal): Promise<Ki
     return { ...base, profile: 'ready' as const, agent, verifyModels };
   } catch { return { ...base, profile: owned ? 'partial' as const : 'blocked' as const, agent: ownedAgent }; }
 }
+
+/** Recover a registration interrupted after the owned filesystem migration. */
+export async function inspectMigratedKimi(root: string, previousRoot: string, signal: AbortSignal): Promise<KimiHostStatus> {
+  const current = await inspectKimi(root, signal);
+  if (!current.agent || root === previousRoot) return current;
+  try {
+    const marker = join(root, 'migration-source.json');
+    await regular(marker);
+    const migration = JSON.parse(await readFile(marker, 'utf8'));
+    // previousRoot comes from this host's own dataDir, never from the marker/client.
+    if (migration.schema !== 1 || migration.source !== previousRoot) return current;
+    const previous = await inspectKimi(previousRoot, signal);
+    return previous.profile === 'ready' && previous.agent ? { ...current, previousAgent: previous.agent } : current;
+  } catch { signal.throwIfAborted(); return current; }
+}
 export async function prepareKimi(root: string, apiKey: string | undefined, signal: AbortSignal, log: KimiDiagnosticLog = () => {}, options: { ensureRuntime?: typeof ensureKimiRuntime; installAdapter?: typeof installKimiAdapter } = {}) {
   signal.throwIfAborted();
   const status = await inspectKimi(root, signal);

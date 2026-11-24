@@ -74,7 +74,7 @@ export function ViewPanel({ threadId }: { threadId: string }) {
   useEffect(() => () => transport.dispose(), [transport]);
   const metricPreferences = useMetricPreferences(viewId ? 'screen:' + viewId : '');
   if (loading || (viewId && verifiedThread !== threadId)) return <section className="sv-view"><p role="status">Проверяю представление этого разговора…</p></section>;
-  if (!viewId) return <section className="sv-view"><p role={error ? 'alert' : 'status'}>{error || 'Попроси партнёра открыть представление в этом разговоре. Он проверит подключение и выбранную компанию.'}</p>
+  if (!viewId) return <section className="sv-view"><p role={error ? 'alert' : 'status'}>{error || 'Попроси агента открыть представление в этом разговоре. Он проверит подключение и выбранную компанию.'}</p>
     <button onClick={() => setReload(value => value + 1)}>Повторить проверку</button></section>;
   return <>{metricPreferences.error && <p role="status" className="svb-preferences-note">Настройки вида показателей: {metricPreferences.error}</p>}
     <ViewSurface key={`${threadId}:${viewId}`} cacheKey={`${threadId}:${viewId}`} transport={transport} metricsPreferences={metricPreferences.preferences} /></>;

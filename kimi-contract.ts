@@ -14,6 +14,7 @@ const key = z.string().max(512).regex(/^sk-kimi-[A-Za-z0-9_-]+$/, 'Нужен к
 export const kimiHostStatusSchema = z.object({
   nodeReady: z.boolean(), nodeVersion: z.string().nullable(),
   profile: z.enum(['absent', 'partial', 'ready', 'blocked']), agent: kimiAgentSchema.nullable(),
+  previousAgent: kimiAgentSchema.optional(),
   needsKey: z.boolean().optional(),
   verifyModels: z.array(z.string()).optional(),
 }).strict();

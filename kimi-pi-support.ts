@@ -16,7 +16,6 @@ export async function createKimiPiSupport(bb: BbPluginApi, hostId: string | null
     if (!hostId || !supported) throw new Error('PI_UNSUPPORTED');
     // The public environment API addresses the server machine, not an arbitrary host.
     if ((await bb.sdk.system.config()).primaryHostId !== hostId) throw new Error('PI_WRONG_HOST');
-    if ((await bb.sdk.hosts.list()).some(host => host.id !== hostId)) throw new Error('PI_MULTIPLE_HOSTS');
     const environment = await bb.sdk.system.machineEnvironment();
     for (const variable of environment.variables) {
       if (!(names as readonly string[]).includes(variable.name)) continue;

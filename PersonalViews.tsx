@@ -51,7 +51,7 @@ export function PersonalOverview({ workspace, onNavigate, onSource, onAction }: 
         <p>{assistant.description}</p>
         <button className="svb-personal-assistant-open" onClick={() => onAction(assistant)} disabled={assistant.available === false} title={assistant.available === false ? assistant.unavailableReason : undefined}>Открыть разговор<Arrow /></button>
         {dayActions.length > 0 && <div className="svb-personal-assistant-tasks" aria-label="Типовые задачи ассистента"><span>Или сразу с задачей</span>{dayActions.map(action => <PersonalActionButton key={action.id} action={action} onAction={onAction} />)}</div>}
-      </aside> : dayActions.length > 0 && <div className="svb-personal-day-partner"><span className="svb-personal-partner-label"><span className="svb-partner-dot" aria-hidden="true" />С партнёром</span><div>{dayActions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div></div>}
+      </aside> : dayActions.length > 0 && <div className="svb-personal-day-partner"><span className="svb-personal-partner-label"><span className="svb-partner-dot" aria-hidden="true" />С агентом</span><div>{dayActions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} compact />)}</div></div>}
     </section>
 
     {personal.continueItems.length > 0 && <section className="svb-personal-block" aria-labelledby="svb-personal-continue-title"><header className="svb-personal-block-heading"><h2 id="svb-personal-continue-title">Продолжить</h2><span>Вернуться к своему</span></header><div className="svb-personal-continue-grid">{personal.continueItems.map(item => {
@@ -74,7 +74,7 @@ export function PersonalSectionPage({ workspace, sectionId, onNavigate, onSource
   const sources = section.sourceIds.flatMap(id => { const source = workspace.sources.find(item => item.id === id); return source ? [source] : []; });
   return <section className="svb-depth-page svb-personal-detail"><PersonalBreadcrumb workspace={workspace} onNavigate={onNavigate} current={section.title} /><header className={`svb-personal-detail-heading svb-personal-tone--${section.icon}`}><span className="svb-personal-topic-symbol"><PersonalIcon name={section.icon} /></span><div><h1>{section.title}</h1><p>{section.description}</p></div></header>
     <div className={`svb-personal-section-content${actions.length ? '' : ' svb-personal-section-content--documents'}`}>
-      {actions.length > 0 && <section><h2><span className="svb-partner-dot" aria-hidden="true" />С партнёром</h2><div className="svb-partner-actions">{actions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div></section>}
+      {actions.length > 0 && <section><h2><span className="svb-partner-dot" aria-hidden="true" />С агентом</h2><div className="svb-partner-actions">{actions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div></section>}
       <section><h2>Материалы</h2><DocumentList sources={sources} onSource={onSource} /></section>
     </div>
   </section>;
@@ -84,7 +84,7 @@ export function PersonalActionsPage({ workspace, onNavigate, onAction }: ViewPro
   const personal = workspace.personal;
   if (!personal) return null;
   const actions = workspace.actions;
-  return <section className="svb-depth-page svb-personal-detail"><PersonalBreadcrumb workspace={workspace} onNavigate={onNavigate} current="С партнёром" /><header className="svb-library-heading"><span className="svb-kicker">С партнёром</span><h1>С чего начнём?</h1><p>Собрать день, вернуться к занятию или обдумать то, что важно.</p></header><div className="svb-personal-actions-grid">{actions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div>{!actions.length && <p className="svb-empty-copy">В этом пространстве пока нет подготовленных действий.</p>}</section>;
+  return <section className="svb-depth-page svb-personal-detail"><PersonalBreadcrumb workspace={workspace} onNavigate={onNavigate} current="С агентом" /><header className="svb-library-heading"><span className="svb-kicker">С агентом</span><h1>С чего начнём?</h1><p>Собрать день, вернуться к занятию или обдумать то, что важно.</p></header><div className="svb-personal-actions-grid">{actions.map(action => <ActionCard key={action.id} action={action} onAction={onAction} />)}</div>{!actions.length && <p className="svb-empty-copy">В этом пространстве пока нет подготовленных действий.</p>}</section>;
 }
 
 export interface PersonalLibraryState { query: string; archiveOpen: boolean; }

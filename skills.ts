@@ -16,16 +16,16 @@ interface Recommendation {
 
 /** These are entry points, not copies of the skills' procedures. */
 export const SKILL_RECOMMENDATIONS: readonly Recommendation[] = [
-  { name: 'metrics-values', title: 'Узнать значения показателей', description: 'Факт, план и динамика из подключённых источников.', prompt: 'Помоги посмотреть значения показателей и понять, как мы движемся к цели. Уточни показатель и период, если их не хватает.', icon: 'ChartNoAxesCombined', kind: 'action', aspectIds: ['metrics', 'finance'] },
+  { name: 'metrics-values', title: 'Узнать значения показателей', description: 'Факт, план и динамика из подключённых источников.', prompt: 'Помоги посмотреть значения показателей и понять, как мы движемся к цели.', icon: 'ChartNoAxesCombined', kind: 'action', aspectIds: ['metrics', 'finance'] },
   { name: 'metrics-intake', title: 'Определить показатели', description: 'Выбрать, что измерять и зачем.', prompt: 'Помоги определить или пересмотреть показатели: что нам нужно измерять, чтобы видеть движение к цели.', icon: 'Target', kind: 'action', aspectIds: ['metrics'] },
-  { name: 'team-person-review', title: 'Провести ревью человека', description: 'Ответственность, результат и следующий шаг.', prompt: 'Помоги провести ревью человека: за что он отвечает, какой результат даёт и что нужно обсудить. Уточни человека и период, если они не указаны.', icon: 'UserRound', kind: 'action', aspectIds: ['team'] },
-  { name: 'team-unit-review', title: 'Провести ревью подразделения', description: 'Цель, результат и способность двигаться дальше.', prompt: 'Помоги провести ревью подразделения за период: как оно движется к цели и какое решение по нему нужно. Уточни подразделение и период, если их не хватает.', icon: 'Users', kind: 'action', aspectIds: ['team'] },
-  { name: 'projects-review', title: 'Провести ревью проекта', description: 'Прогресс, препятствия и нужное решение.', prompt: 'Помоги провести ревью проекта за период: есть ли движение к цели, что мешает и какое решение нужно. Уточни проект и период, если они не указаны.', icon: 'Flag', kind: 'action', aspectIds: ['projects'] },
-  { name: 'rhythm-meeting-agenda', title: 'Подготовить повестку', description: 'Что обсудить и решить на ближайшей встрече.', prompt: 'Подготовь повестку к предстоящей встрече: что нужно обсудить и решить. Уточни встречу, участников и дату, если они не указаны.', icon: 'CalendarDays', kind: 'action', aspectIds: ['rhythm', 'team', 'projects', 'metrics'] },
+  { name: 'team-person-review', title: 'Провести ревью человека', description: 'Ответственность, результат и следующий шаг.', prompt: 'Помоги провести ревью человека: за что он отвечает, какой результат даёт и что нужно обсудить.', icon: 'UserRound', kind: 'action', aspectIds: ['team'] },
+  { name: 'team-unit-review', title: 'Провести ревью подразделения', description: 'Цель, результат и способность двигаться дальше.', prompt: 'Помоги провести ревью подразделения за период: как оно движется к цели и какое решение по нему нужно.', icon: 'Users', kind: 'action', aspectIds: ['team'] },
+  { name: 'projects-review', title: 'Провести ревью проекта', description: 'Прогресс, препятствия и нужное решение.', prompt: 'Помоги провести ревью проекта за период: есть ли движение к цели, что мешает и какое решение нужно.', icon: 'Flag', kind: 'action', aspectIds: ['projects'] },
+  { name: 'rhythm-meeting-agenda', title: 'Подготовить повестку', description: 'Что обсудить и решить на ближайшей встрече.', prompt: 'Подготовь повестку к предстоящей встрече: что нужно обсудить и решить.', icon: 'CalendarDays', kind: 'action', aspectIds: ['rhythm', 'team', 'projects', 'metrics'] },
   { name: 'rhythm-meeting-debrief', title: 'Разобрать встречу', description: 'Обсуждения, решения и поручения по транскрипту.', prompt: 'Помоги разобрать прошедшую встречу по транскрипту: что обсудили, решили и поручили. Если транскрипта нет, попроси его.', icon: 'MessageSquare', kind: 'action', aspectIds: ['rhythm', 'team', 'projects'] },
-  { name: 'roles-strategy', title: 'Обсудить стратегию', description: 'Сверить выбор и действия с курсом компании.', prompt: 'Посмотри со стороны стратегии: помоги разобраться с курсом компании и нашим выбором. Начни с текущего контекста и моего вопроса.', icon: 'Compass', kind: 'role', aspectIds: ['strategy'] },
+  { name: 'roles-strategy', title: 'Обсудить стратегию', description: 'Сверить выбор и действия с курсом компании.', prompt: 'Посмотри со стороны стратегии: помоги разобраться с курсом компании и нашим выбором.', icon: 'Compass', kind: 'role', aspectIds: ['strategy'] },
   { name: 'roles-metrics', title: 'Обсудить цели и показатели', description: 'Связать желаемый результат с измерением.', prompt: 'Посмотри со стороны целей и показателей: помоги разобраться, какой результат нужен и как увидеть движение к нему.', icon: 'Target', kind: 'role', aspectIds: ['metrics'] },
-  { name: 'roles-team', title: 'Обсудить команду', description: 'Люди, ответственность и развитие команды.', prompt: 'Посмотри со стороны команды: помоги разобраться в людях, ответственности и нужных изменениях. Начни с текущего контекста и моего вопроса.', icon: 'Users', kind: 'role', aspectIds: ['team'] },
+  { name: 'roles-team', title: 'Обсудить команду', description: 'Люди, ответственность и развитие команды.', prompt: 'Посмотри со стороны команды: помоги разобраться в людях, ответственности и нужных изменениях.', icon: 'Users', kind: 'role', aspectIds: ['team'] },
   { name: 'roles-projects', title: 'Обсудить проекты', description: 'Зачем нужен проект и как он движется.', prompt: 'Посмотри со стороны проектов: помоги разобраться, зачем нужен проект и движется ли он к нужному результату.', icon: 'Flag', kind: 'role', aspectIds: ['projects'] },
   { name: 'roles-rhythm', title: 'Обсудить ритм управления', description: 'Встречи и отчёты, которые помогают делу.', prompt: 'Посмотри со стороны ритма управления: помоги разобраться, каким встречам и отчётам стоит уделять время, чтобы двигаться к цели.', icon: 'CalendarDays', kind: 'role', aspectIds: ['rhythm'] },
 ];
@@ -92,7 +92,7 @@ function withSkill(action: CatalogAction, catalog: SkillCatalog): CatalogAction 
     kind: recommendation?.kind ?? action.kind ?? 'action',
     available: Boolean(path),
     ...(path ? {
-      method: `Используй скилл svaib:${name}. Сначала прочитай его инструкцию ${JSON.stringify(path)} и следуй ей. Не заменяй процедуру догадкой.\n\n${action.method}`,
+      method: [`Используй скилл svaib:${name} из ${JSON.stringify(path)}.`, action.method].filter(Boolean).join('\n'),
     } : { unavailableReason: catalog.error ?? missingReason }),
   };
 }
@@ -108,7 +108,7 @@ export function enrichWorkspaceActions(workspace: CatalogWorkspace, catalog: Ski
     const action = withSkill({
       id, title: recommendation.title, description: recommendation.description, prompt: recommendation.prompt,
       icon: recommendation.icon, kind: recommendation.kind, aspectIds: [...recommendation.aspectIds],
-      skill: recommendation.name, method: 'Учитывай выбранный объект и контекст запроса.', sourceIds: [],
+      skill: recommendation.name, method: '', sourceIds: [],
     }, catalog);
     if (action.available) actions.push(action);
   }

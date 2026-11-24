@@ -21,7 +21,7 @@ export const treeItemSchema = z.object({
   template: z.string().nullable(), viewKind: z.string().max(30).nullable(),
 }).strict();
 export const treeConfigSchema = z.object({ schemaVersion: z.literal(2), catalogVersion: z.string(), canonSnapshot: z.string(), companyName: z.string().min(1).max(100),
-  overview: z.object({ sourceHash: z.string().regex(/^[0-9a-f]{64}$/), capturedAt: z.iso.datetime().optional(), maxDepth: z.number().int().positive(), omittedBranches: z.number().int().nonnegative(), omittedItems: z.number().int().nonnegative(), reservedPaths: z.array(z.string().min(1).max(2000)).max(600) }).strict().optional(),
+  overview: z.object({ sourceId: z.string().regex(/^[0-9a-f]{64}$/).optional(), sourceHash: z.string().regex(/^[0-9a-f]{64}$/), capturedAt: z.iso.datetime().optional(), maxDepth: z.number().int().positive(), omittedBranches: z.number().int().nonnegative(), omittedItems: z.number().int().nonnegative(), reservedPaths: z.array(z.string().min(1).max(2000)).max(600) }).strict().optional(),
   tree: z.array(treeItemSchema).min(1).max(700) }).strict().superRefine((config, ctx) => {
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
   const nodes = new Map(config.tree.map(item => [item.id, item]));
@@ -84,5 +84,5 @@ export function planTree(config: TreeConfig) {
       'Сверить версию, отпечаток канона и SHA-256 шаблонов. Уточнить оставшиеся шаблонные имена и предложенные элементы; проверить полноту узлов по версии канона, указанной в плане.',
       'Подготовить тексты и карты README по текущим спецификациям. Для приватных папок сначала настроить права хранилища.',
       'Показать чувствительные изменения существующего пространства отдельно; после согласованного применения проверить файлы и ссылки, затем записать достоверную версию каркаса и подтверждённую привязку реальной компании. Подтверждение View не закрывает другие этапы онбординга.',
-      'Интейки стратегии, целей и профиля руководителя, содержательное наполнение и синхронизация пространства выполняются следующими треками; их готовность не требуется для создания каркаса.'] };
+      'Помощники заполнения стратегии, целей и профиля руководителя, содержательное наполнение и синхронизация пространства выполняются следующими треками; их готовность не требуется для создания каркаса.'] };
 }

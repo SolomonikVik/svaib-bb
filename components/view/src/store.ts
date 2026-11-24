@@ -84,9 +84,16 @@ export class ViewStore {
         return this.receipt(existing.view, receipt.event, true);
       }
       if (kind === 'created' && existing) throw new Refusal('already_exists', 'Представление уже существует.');
-      if (kind === 'created' && 'onlyIfEmpty' in data && data.onlyIfEmpty && Object.values(this.state.entries).some(entry =>
-        entry.view.document.blocks.length === 1 && entry.view.document.blocks[0].type === 'scaffold')) {
-        throw new Refusal('view_discovery_changed', 'Появилось подходящее представление. Перечитайте список и используйте его.');
+      if (kind === 'created' && 'onlyIfEmpty' in data && data.onlyIfEmpty) {
+        const block = data.document.blocks[0];
+        const source = block?.type === 'scaffold' ? block.config.overview?.sourceId : undefined;
+        const exists = Object.values(this.state.entries).some(({view}) => {
+          const saved = view.document.blocks[0];
+          if (view.document.blocks.length !== 1 || saved?.type !== 'scaffold') return false;
+          const savedSource = saved.config.overview?.sourceId;
+          return !source || !savedSource || source === savedSource;
+        });
+        if (exists) throw new Refusal('view_discovery_changed', 'Появилось подходящее представление. Перечитайте список и используйте его.');
       }
       if (kind !== 'created' && !existing) throw new Refusal('not_found', 'Представление не найдено.', 404);
       if ('expectedRevision' in data) {
@@ -101,6 +108,8 @@ export class ViewStore {
         const before = overview(existing.view.document), after = overview(data.document);
         if ('refreshOverview' in data && data.refreshOverview) {
           if (!after || after.config.schemaVersion !== 2 || !after.config.overview?.capturedAt) throw new Refusal('invalid_overview', 'Обновление требует нового снимка папки.');
+          const sourceId = before?.config.overview?.sourceId;
+          if (sourceId && sourceId !== after.config.overview.sourceId) throw new Refusal('overview_source_mismatch', 'Обзор относится к другой папке.');
         } else if (before || after) {
           if (!before || !after || before.id !== after.id) throw new Refusal('overview_immutable', 'Нельзя заменить режим обзора.');
           try { checkOverviewUpdate(before.config as any, after.config as any); }

@@ -2,13 +2,11 @@
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -22,8 +20,9 @@ BUILD_BB_VERSION = "0.48.1"
 BUILD_SDK_VERSION = "0.6.104"
 FILES = [
     "*.ts", "*.tsx", "*.css", "tsconfig.json", "assets/", "components/",
-    "dist/", "experiments/account-prototype/", "methods/", "npm-release.json",
-    "scripts/prepare_methods.py", "scripts/setup-kimi-cc.mjs",
+    "dist/", "account/", "npm-release.json",
+    "scripts/setup-kimi-cc.mjs",
+    "scripts/verify_hook_runtime.py", "scripts/replace-pi-registration.mjs", "scripts/replace-pi-registration.d.mts",
     "scripts/setup-kimi-cc.d.mts", "scripts/kimi-diagnostic-fields.mjs",
     "scripts/kimi-diagnostic-fields.d.mts", "PLUGIN_OVERVIEW.md", "README.md",
 ]
@@ -47,6 +46,7 @@ def validate_identity(package, tag):
 def prepare(root, tag):
     package = read_json(root / "package.json")
     validate_identity(package, tag)
+    check_independent_package(root)
     dependencies = package.get("dependencies", {})
     if dependencies.get(LOCAL_DEPENDENCY) not in (
         "file:./components/view", "file:components/view"
@@ -73,7 +73,6 @@ def prepare(root, tag):
     write_json(root / "npm-release.json", {
         "repository": REPOSITORY, "tag": tag, "commit": revision,
         "pluginVersion": package["version"],
-        "methodVersion": read_json(root / "methods/manifest.json")["method"]["version"],
     })
 
 
@@ -137,16 +136,14 @@ def verify(root, tag):
     if not (root / "node_modules" / LOCAL_DEPENDENCY / "package.json").is_file():
         raise ValueError("Missing bundled View component")
     verify_portable(root)
-    spec = importlib.util.spec_from_file_location("prepare_methods", root / "scripts/prepare_methods.py")
-    helper = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(helper)
-    with tempfile.TemporaryDirectory() as temp:
-        data_dir = Path(temp).resolve()
-        for provider in ("codex", "claude"):
-            helper.prepare(provider, data_dir, source_root=root)
-    manifest = read_json(root / "methods/manifest.json")
-    return {"package": NAME, "version": package["version"],
-            "methodVersion": manifest["method"]["version"], "providers": ["codex", "claude"]}
+    check_independent_package(root)
+    return {"package": NAME, "version": package["version"]}
+
+
+def check_independent_package(root):
+    for name in ("methods", "scripts/prepare_methods.py"):
+        if (root / name).exists() or (root / name).is_symlink():
+            raise ValueError("Unexpected bundled Harness in the BB distribution: " + name)
 
 
 def receipt(tarball, output):

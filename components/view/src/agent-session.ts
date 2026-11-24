@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { idSchema, requestIdSchema, type View, type ViewDocument } from './model';
 import { ViewClient } from './client';
 import { Refusal } from './store';
-import { scaffoldCatalog } from './scaffold';
-import { toTreeConfig } from './scaffold-tree';
+import { initialTreeConfig } from './scaffold-tree';
 import { materializeMutation } from './mutation';
 
 export const openSchema = z.object({
@@ -16,10 +15,9 @@ export const resultSchema = z.object({ id: idSchema }).strict();
 
 // This factory has no company examples, local paths, credentials or filesystem effects.
 export function spaceSetupDocument(companyName: string): ViewDocument {
-  const config = toTreeConfig({ schemaVersion: 1, catalogVersion: scaffoldCatalog.version,
-    canonSnapshot: scaffoldCatalog.canonSnapshot, companyName, companyKit: [], nodes: [] });
+  const config = initialTreeConfig(companyName);
   return { schemaVersion: 1, title: 'Настройка пространства',
-    description: 'Согласуйте первоначальный каркас пространства и передайте структуру партнёру.',
+    description: 'Согласуйте первоначальный каркас пространства и передайте структуру агенту.',
     layout: 'stack', blocks: [{ id: 'space-setup', type: 'scaffold', version: 1,
       title: 'Первый каркас пространства', config }] };
 }

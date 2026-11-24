@@ -30,6 +30,7 @@ export const runtimeViewSchema = z.object({ platform: z.string(), status: z.enum
   versions: z.record(z.string(), z.string()).optional(), context: runtimeContextSchema.optional(),
   requirements: z.array(runtimeRequirementSchema).optional(), missing: z.array(runtimeRequirementSchema).optional(),
   operationError: z.string().optional(), installerUncertain: z.boolean().optional(),
+  previouslyPrepared: z.boolean().optional(),
 }).strict();
 export type RuntimeView = z.infer<typeof runtimeViewSchema>;
 export const runtimeProgressSchema = runtimeViewSchema.pick({ platform: true, status: true, step: true, message: true, context: true });

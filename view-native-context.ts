@@ -5,8 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import type { PluginBbSdk, PluginKvStorage } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import type { ViewContext } from './view-transport';
-import { validatePersistentFolder } from './experiments/account-prototype/folder-selection';
-import { connectionMetadataSchema, type ConnectionBinding } from './experiments/account-prototype/connection';
+import { validatePersistentFolder } from './account/folder-selection';
 
 export type VerifiedViewCompany = { account_id: string; company_id: string; subject_id: string; epoch: number };
 export interface ViewAccountPort {
@@ -21,6 +20,15 @@ export class ViewContextError extends Error {
 }
 const id = z.string().min(1).max(256);
 const companyId = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
+// Reads the company recorded for a thread. Historical connection fields stay
+// parseable for pins created before the simplification removed the flow.
+const workspaceMetadataSchema = z.object({
+  workspaceCompanyId: companyId.optional(),
+  inPlace: z.boolean().optional(),
+  successorThreadId: z.string().optional(),
+  binding: z.object({ projectId: z.string(), environmentId: z.string(),
+    hostId: z.string(), providerId: z.string() }).strict().optional(),
+}).passthrough();
 const pinSchema = z.object({ schema: z.literal(1), state: z.enum(['pinned', 'blocked']),
   thread_id: id, environment_id: id, host_id: id, real_root: z.string().refine(isAbsolute),
   company_id: companyId, account_id: id, subject_id: id,
@@ -28,10 +36,10 @@ const pinSchema = z.object({ schema: z.literal(1), state: z.enum(['pinned', 'blo
 }).strict();
 type Pin = z.infer<typeof pinSchema>;
 const key = (threadId: string) => 'screen:context:' + threadId;
-const freshChat = () => new ViewContextError('new_clean_thread_required',
-  'Контекст этого разговора нельзя безопасно перепривязать. Открой новый чистый чат в нужной рабочей папке.');
+const contextChanged = () => new ViewContextError('context_changed',
+  'Представление связано с другой компанией или рабочей папкой.');
 const folderMovePending = () => new ViewContextError('workspace_selection_required',
-  'Продолжи подключение с партнёром здесь: он проверит выбранную папку и сохранит компанию без нового входа.');
+  'Продолжи подключение с агентом здесь: он проверит выбранную папку и сохранит компанию без нового входа.');
 
 function parseBinding(raw: string): string {
   // The canonical file is a flat two-key object. Token checks also reject duplicate keys
@@ -81,14 +89,14 @@ async function readCompanyBinding(environmentPath: string, allowUnbound: boolean
         const company = parseBinding(new TextDecoder('utf-8', { fatal: true }).decode(raw));
         return { realRoot: await realpath(current), companyId: company };
       } catch {
-        throw new ViewContextError('workspace_binding_invalid', 'В ближайшей .svaib нет корректного platform.json. Попроси партнёра завершить выбор компании через онбординг.');
+        throw new ViewContextError('workspace_binding_invalid', 'В ближайшей .svaib нет корректного platform.json. Попроси агента завершить выбор компании через онбординг.');
       } finally { await file?.close(); }
     }
     const parent = dirname(current);
     if (parent === current) {
       if (allowUnbound) return { realRoot: await realpath(environmentPath), companyId: null };
       throw new ViewContextError('workspace_binding_missing',
-      'Рабочая папка ещё не связана с компанией. Попроси партнёра продолжить онбординг и записать привязку штатным помощником.');
+      'Рабочая папка ещё не связана с компанией. Попроси агента продолжить онбординг и записать привязку штатным помощником.');
     }
     current = parent;
   }
@@ -108,7 +116,7 @@ export function createViewPluginContext(options: ContextOptions) {
     const value = await options.kv.get<unknown>(key(threadId));
     if (value === undefined) return;
     const parsed = pinSchema.safeParse(value);
-    if (!parsed.success || parsed.data.thread_id !== threadId) throw freshChat();
+    if (!parsed.success || parsed.data.thread_id !== threadId) throw contextChanged();
     return parsed.data;
   }
   async function native(threadId: string) {
@@ -121,7 +129,7 @@ export function createViewPluginContext(options: ContextOptions) {
     const environment = structuredClone(rawEnvironment);
     if (environment.id !== thread.environmentId || environment.status !== 'ready')
       throw new ViewContextError('workspace_unavailable', 'Рабочая среда BB ещё не готова. Повтори после её запуска.');
-    const chooseFolder = () => new ViewContextError('workspace_selection_required', 'Для материалов организации нужна постоянная папка. Открой новый разговор BB, выбери No project → New project или существующий проект и оставь Project checkout. Git не нужен. Затем отправь подготовленное продолжение svaib. Файлы пока не меняются.');
+    const chooseFolder = () => new ViewContextError('workspace_selection_required', 'Конструктору недоступна рабочая папка этого разговора. Подключение пространства можно продолжить без конструктора.');
     if (environment.workspaceProvisionType !== 'unmanaged' || project.kind !== 'standard' || project.id !== thread.projectId ||
         environment.projectId !== thread.projectId || !environment.path) throw chooseFolder();
     if (!system.primaryHostId || environment.hostId !== system.primaryHostId)
@@ -131,7 +139,9 @@ export function createViewPluginContext(options: ContextOptions) {
       selectedRoot = await (options.validatePersistentRootForTesting
         ? options.validatePersistentRootForTesting(environment.path, environment.hostId, environment)
         : validatePersistentFolder(options.sdk, environment.hostId, environment, environment.path));
-    } catch { throw chooseFolder(); }
+    } catch (error) {
+      throw new ViewContextError('workspace_selection_required', error instanceof Error ? error.message : 'Выбранная папка недоступна конструктору.');
+    }
     if (selectedRoot !== environment.path || !project.sources.some(source => source.type === 'local_path' && source.hostId === environment.hostId &&
       source.projectId === project.id && source.path === selectedRoot)) throw chooseFolder();
     const binding = await readCompanyBinding(environment.path, true);
@@ -142,31 +152,31 @@ export function createViewPluginContext(options: ContextOptions) {
     if (!/^thr_[a-z0-9]+$/.test(threadId)) throw new ViewContextError('invalid_thread', 'Неизвестный разговор BB.');
     signal.throwIfAborted();
     const previous = await stored(threadId);
-    if (previous?.state === 'blocked') throw freshChat();
+    if (previous?.state === 'blocked') throw contextChanged();
     const live = await native(threadId);
     signal.throwIfAborted();
     if (selector !== undefined && !companyId.safeParse(selector).success)
       throw new ViewContextError('invalid_company', 'Выбери действительную компанию svaib.');
     let rawMetadata: unknown;
     try { rawMetadata = await options.sdk.threads.getPluginMetadata({ threadId }); } catch { /* no authorized relocation */ }
-    const parsedMetadata = connectionMetadataSchema.safeParse(rawMetadata);
+    const parsedMetadata = workspaceMetadataSchema.safeParse(rawMetadata);
     const metadata = parsedMetadata.success ? parsedMetadata.data : undefined;
     const expectedCompany = previous?.company_id ?? metadata?.workspaceCompanyId;
     if (live.binding.companyId && expectedCompany && live.binding.companyId !== expectedCompany) {
       if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
-      throw freshChat();
+      throw contextChanged();
     }
     const selectedCompany = live.binding.companyId ?? expectedCompany ?? selector;
-    if (!selectedCompany) throw new ViewContextError('company_required', 'Сначала выбери или создай компанию в svaib и передай её ID при открытии View.');
+    if (!selectedCompany) throw new ViewContextError('company_required', 'Не указан companyId выбранной компании.');
     if (selector !== undefined && selector !== selectedCompany) {
       if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
-      throw freshChat();
+      throw contextChanged();
     }
     const verified = await options.account.verifiedCompany(selectedCompany, signal);
     signal.throwIfAborted();
     if (!verified.account_id.startsWith('acct_') || !verified.subject_id ||
       verified.company_id !== selectedCompany || verified.epoch !== options.account.epoch())
-      throw new ViewContextError('account_mismatch', 'Кабинет BB не подтвердил доступ к выбранной компании. Проверь подключение с партнёром.');
+      throw new ViewContextError('account_mismatch', 'Кабинет BB не подтвердил доступ к выбранной компании. Проверь подключение с агентом.');
     const candidate: Pin = { schema: 1, state: 'pinned', thread_id: threadId,
       environment_id: live.environment.id, host_id: live.environment.hostId, real_root: live.binding.realRoot,
       company_id: verified.company_id, account_id: verified.account_id, subject_id: verified.subject_id,
@@ -186,7 +196,7 @@ export function createViewPluginContext(options: ContextOptions) {
         // START validates it. Keep the old pin intact until that check completes.
         if (sameIdentity && previous.environment_id !== candidate.environment_id)
           throw folderMovePending();
-        await options.kv.set(key(threadId), { ...previous, state: 'blocked' }); throw freshChat();
+        await options.kv.set(key(threadId), { ...previous, state: 'blocked' }); throw contextChanged();
       }
     }
     if (!previous) {
@@ -197,7 +207,7 @@ export function createViewPluginContext(options: ContextOptions) {
           if (!parent || parent.state !== 'pinned' || parent.thread_id === threadId ||
             parent.real_root !== candidate.real_root || parent.host_id !== candidate.host_id ||
             parent.company_id !== candidate.company_id || parent.account_id !== candidate.account_id ||
-            parent.subject_id !== candidate.subject_id) throw freshChat();
+            parent.subject_id !== candidate.subject_id) throw contextChanged();
         }
       }
       if (!live.thread.sourceThreadId && live.thread.originKind === 'fork') {
@@ -205,7 +215,7 @@ export function createViewPluginContext(options: ContextOptions) {
         // Unknown old history is not evidence of a clean chat. No transcript parsing or metadata trust.
         const history = await options.sdk.threads.events.list({ threadId,
           types: ['turn/completed', 'thread/compacted'], order: 'desc', limit: '1' });
-        if (history.length || live.thread.originKind === 'fork') throw freshChat();
+        if (history.length || live.thread.originKind === 'fork') throw contextChanged();
       }
     }
     // Fence folder/native changes that occurred while reading proof or contacting the gateway.
@@ -223,7 +233,7 @@ export function createViewPluginContext(options: ContextOptions) {
         verified.epoch === options.account.epoch();
       if (sameCompanyMove) throw folderMovePending();
       if (previous) await options.kv.set(key(threadId), { ...previous, state: 'blocked' });
-      throw freshChat();
+      throw contextChanged();
     }
     signal.throwIfAborted();
     if (!previous || relocated) await options.kv.set(key(threadId), candidate);
@@ -232,30 +242,7 @@ export function createViewPluginContext(options: ContextOptions) {
       subject_id: candidate.subject_id, thread_id: candidate.thread_id, environment_id: candidate.environment_id,
       host_id: candidate.host_id } satisfies ViewContext, realRoot: candidate.real_root, epoch: verified.epoch };
   }
-  return { async validateWorkspaceMove(threadId: string, from: ConnectionBinding, to: ConnectionBinding, companyId?: string) {
-    if (from.projectId !== to.projectId || from.hostId !== to.hostId || from.providerId !== to.providerId) throw freshChat();
-    const live = await native(threadId);
-    const previous = await stored(threadId);
-    if (previous?.state === 'blocked' || live.thread.projectId !== to.projectId || live.thread.providerId !== to.providerId ||
-        live.environment.id !== to.environmentId || live.environment.hostId !== to.hostId) throw freshChat();
-    const oldEnv = await options.sdk.environments.get({ environmentId: from.environmentId });
-    if (oldEnv.id !== from.environmentId || oldEnv.hostId !== from.hostId || !oldEnv.path) throw freshChat();
-    const oldBinding = await readCompanyBinding(oldEnv.path, true);
-    const expected = previous?.company_id ?? companyId ?? oldBinding.companyId;
-    if ((companyId && expected !== companyId) || (oldBinding.companyId && expected !== oldBinding.companyId) ||
-        (live.binding.companyId && expected && live.binding.companyId !== expected)) throw freshChat();
-    if (previous) {
-      const verified = await options.account.verifiedCompany(previous.company_id);
-      if (verified.account_id !== previous.account_id || verified.subject_id !== previous.subject_id ||
-          verified.company_id !== previous.company_id || verified.epoch !== options.account.epoch() ||
-          previous.host_id !== to.hostId || previous.source_thread_id !== live.thread.sourceThreadId ||
-          previous.parent_thread_id !== live.thread.parentThreadId) throw freshChat();
-    }
-    const after = await native(threadId);
-    if (after.environment.id !== to.environmentId || after.binding.realRoot !== live.binding.realRoot ||
-        after.binding.companyId !== live.binding.companyId) throw freshChat();
-    return expected ?? live.binding.companyId ?? undefined;
-  }, async resolve(threadId: string, signal = new AbortController().signal, companyId?: string) {
+  return { async resolve(threadId: string, signal = new AbortController().signal, companyId?: string) {
     const pending = (queues.get(threadId) ?? Promise.resolve()).catch(() => {}).then(() => resolveUnlocked(threadId, signal, companyId));
     queues.set(threadId, pending);
     try { return await pending; } finally { if (queues.get(threadId) === pending) queues.delete(threadId); }
