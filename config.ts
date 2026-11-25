@@ -1,9 +1,36 @@
 import { readFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { z } from 'zod';
 import type { Action, Workspace, MetricsSnapshot, LinkHub, ClientHub, WorkspaceAspect, PersonalSpace } from './types';
 import { metricsDashboardSchema } from './metrics-model';
+
+// Only one-to-one company document moves from scaffold 5.0. A profile's source
+// IDs, its custom paths and the profile on disk are left intact.
+const movedCompanyDocuments = new Map([
+  ['01_company/01_strategic/goal.md', '00_компания/00_стратегия/цели.md'],
+  ['01_company/01_strategic/vision.md', '00_компания/00_стратегия/видение.md'],
+  ['01_company/01_strategic/strategy.md', '00_компания/00_стратегия/стратегия.md'],
+  ['01_company/02_active.md', '00_компания/_делаем.md'],
+  ['01_company/03_backlog.md', '00_компания/_планы.md'],
+  ['01_company/04_progress.md', '00_компания/_хроника.md'],
+  ['01_company/04_progress/weekly-progress.md', '00_компания/_хроника/weekly-progress.md'],
+  ['01_company/05_decisions.md', '00_компания/_решения.md'],
+]);
+
+function resolveMovedCompanyDocument(root: string, path: string, inside: string): string {
+  const moved = movedCompanyDocuments.get(inside.split(sep).join('/'));
+  if (!moved) return path;
+  try {
+    // lstat also preserves an explicitly configured symlink, even if dangling.
+    // The document reader still rejects symlinks.
+    if (lstatSync(path, { throwIfNoEntry: false })) return path;
+    const candidate = resolve(root, moved);
+    if (lstatSync(candidate, { throwIfNoEntry: false })?.isFile()
+        && realpathSync(candidate) === candidate) return candidate;
+  } catch { /* Unavailable metadata is not a reason to choose a different source. */ }
+  return path;
+}
 
 export const idSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/);
 export const aspectIdSchema = z.enum(['strategy', 'metrics', 'team', 'finance', 'projects', 'processes', 'rhythm']);
@@ -116,7 +143,7 @@ export function parseConfig(value: unknown, baseDir: string): WorkplaceConfig {
       if (isAbsolute(s.path)) throw new Error('Путь источника должен быть относительным к корню пространства.');
       const path = resolve(root, s.path); const inside = relative(root, path);
       if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) throw new Error('Источник за пределами пространства.');
-      return { ...s, path };
+      return { ...s, path: resolveMovedCompanyDocument(root, path, inside) };
     });
     const ids = new Set(sources.map(s => s.id));
     for (const s of w.signals) if (!ids.has(s.sourceId)) throw new Error('У сигнала нет источника.');
@@ -225,7 +252,7 @@ export async function loadConfig(path: string): Promise<WorkplaceConfig> {
   return parseConfig(JSON.parse(data.toString('utf8')), dirname(path));
 }
 
-/** SDK configure is synchronous; read only the operator-owned descriptor, never source content. */
+/** SDK configure is synchronous; read the descriptor and path metadata, never source content. */
 export function loadConfigSync(path: string): WorkplaceConfig {
   if (!path.trim()) return EMPTY_CONFIG;
   if (!isAbsolute(path)) throw new Error('configPath должен быть абсолютным путём на машине BB-сервера.');

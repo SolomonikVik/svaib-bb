@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "version": "5.0.0",
-  "canonSnapshot": "510c12f34d6c",
+  "canonSnapshot": "577e5d49ddf9",
   "templates": [
     {
       "path": "templates/_встречи/README.md",
@@ -73,7 +73,7 @@
     },
     {
       "path": "templates/management-kit/_вводная.md",
-      "sha256": "1d1c2430c93f287781bbb38b6bd19cd5a71af0b08e21fc6cade87c1aad88181f"
+      "sha256": "d77017a18f3c1a4d204ed7c6809362e788a6a08fe07cbf433f9ad037fab29463"
     },
     {
       "path": "templates/management-kit/_делаем.md",
