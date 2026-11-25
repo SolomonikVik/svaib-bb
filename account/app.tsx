@@ -175,7 +175,6 @@ export function AccountPage({ production = false, preparationPanels, workspaces 
       groupStages.slice(0, -1).every(id => marks[id]?.state === 'done') && marks[groupStages.at(-1)!]?.state !== 'done';
     const prompt = firstWork ? 'Профиль и зона ответственности уже подготовлены. Помоги перейти к первой полезной задаче с агентом svaib.'
       : stepId === 'space' ? 'Помоги подключить рабочую папку компании по скиллу onboarding.'
-      : stepId === 'company-space' ? 'Помоги продолжить настройку общего пространства компании по скиллу onboarding.'
       : task ? 'Продолжи онбординг svaib по установленному скиллу.' : 'Помоги продолжить настройку svaib.';
     const initialPrompt = `${prompt}${stage}${choice} ${installHint}`;
     if (!verified || !view?.me?.account_id) { navigate.toCompose({ initialPrompt, focusPrompt: false }); return; }
@@ -234,7 +233,6 @@ export function AccountPage({ production = false, preparationPanels, workspaces 
         <button type="button" className="svaib-journey-action" onClick={() => continueJourney()}>Продолжить</button>
       </section> :
       <OnboardingJourney setup={setup} setupComplete={setupComplete} busy={busy || !verified}
-        showCompanyContinue={progress.role === 'owner' && Boolean(companyId)}
         showNextSteps={personal?.snapshot?.accountId === view?.me?.account_id ? personal?.snapshot?.preferences.showNextSteps : true}
         contextLabel={companyId ? `Компания: ${selectedCompanyName}` : undefined}
         nextSteps={next?.stages.map(stage => ({ id: stage.id, title: stage.title, state: stage.state ?? 'next' })) ?? []}

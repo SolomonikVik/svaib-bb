@@ -24,7 +24,6 @@ export type OnboardingJourneyProps = {
   busy?: boolean;
   contextLabel?: string;
   showNextSteps?: boolean;
-  showCompanyContinue?: boolean;
 };
 
 const setupLabels: Record<SetupStep['state'], string> = {
@@ -42,7 +41,7 @@ const nextLabels: Record<NextStep['state'], string> = {
   unverified: 'Не проверено',
 };
 
-export function OnboardingJourney({ setup, setupComplete, nextSteps, stagesAvailable = false, onContinue, busy = false, contextLabel, showNextSteps = true, showCompanyContinue = false }: OnboardingJourneyProps) {
+export function OnboardingJourney({ setup, setupComplete, nextSteps, stagesAvailable = false, onContinue, busy = false, contextLabel, showNextSteps = true }: OnboardingJourneyProps) {
   const headingId = useId();
   const currentId = setup.find(step => step.state === 'current')?.id;
   const visibleNext = nextSteps.slice(0, 3);
@@ -69,7 +68,6 @@ export function OnboardingJourney({ setup, setupComplete, nextSteps, stagesAvail
         <summary><span><span className="svaib-journey-complete-mark" aria-hidden="true">✓</span> Личная подготовка завершена</span><span className="svaib-journey-details-label"><span className="svaib-journey-when-closed">Показать шаги</span><span className="svaib-journey-when-open">Свернуть</span></span></summary>
         {setupList}
       </details>
-      {showCompanyContinue && <button type="button" className="svaib-journey-action" disabled={busy} onClick={() => onContinue('company-space')}>Продолжить настройку пространства компании</button>}
       {showNextSteps && <div className="svaib-journey-next">
         <h3>Что дальше</h3>
         {visibleNext.length ? <ol className="svaib-journey-next-list">
